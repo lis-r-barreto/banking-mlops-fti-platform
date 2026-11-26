@@ -1,0 +1,144 @@
+name: Pipeline CI & Feature PR Promotion
+
+on:
+  push:
+    branches:
+      - "feature/**"
+  pull_request:
+    branches:
+      - "develop"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  governance-and-quality:
+    name: Governance, Lint, Typecheck & Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Sync dev dependencies
+        run: uv sync --extra dev
+
+      - name: Validate Conventional Branch 1.0.0 (feature/*-only)
+        env:
+          HEAD_BRANCH: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
+        run: uv run python -m banking_fti.governance.cli validate-branch --branch "$HEAD_BRANCH"
+
+      - name: Validate Conventional Commits 1.0.0
+        env:
+          PR_TITLE: ${{ github.event_name == 'pull_request' && github.event.pull_request.title || '' }}
+        run: |
+          git fetch origin develop:refs/remotes/origin/develop || true
+          if git rev-parse --verify origin/develop >/dev/null 2>&1; then
+            COMMIT_RANGE="origin/develop..HEAD"
+          else
+            COMMIT_RANGE="HEAD"
+          fi
+          if [ -n "$PR_TITLE" ]; then
+            uv run python -m banking_fti.governance.cli validate-commits \
+              --pr-title "$PR_TITLE" \
+              --commit-range "$COMMIT_RANGE"
+          else
+            uv run python -m banking_fti.governance.cli validate-commits \
+              --commit-range "$COMMIT_RANGE"
+          fi
+
+      - name: Run quality checks and offline pytest
+        run: make check
+
+  open-develop-pr:
+    name: Auto-Open PR (feature/* -> develop, Manual Merge)
+    needs: governance-and-quality
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/feature/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Sync dev dependencies
+        run: uv sync --extra dev
+
+      - name: Idempotently open or update feature -> develop PR (auto-merge disabled)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { execFileSync } = require("node:child_process");
+            const { owner, repo } = context.repo;
+            const featureBranch = context.ref.replace("refs/heads/", "");
+
+            execFileSync("git", ["fetch", "origin", "develop:refs/remotes/origin/develop"], { stdio: "inherit" });
+            const { data: openPrs } = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: "open",
+              head: `${owner}:${featureBranch}`,
+              base: "develop",
+            });
+
+            const planJson = execFileSync(
+              "uv",
+              [
+                "run",
+                "python",
+                "-m",
+                "banking_fti.governance.cli",
+                "plan-promotion",
+                "--stage",
+                "feature-to-develop",
+                "--feature-branch",
+                featureBranch,
+                "--commit-range",
+                "origin/develop..HEAD",
+                "--open-prs-json",
+                JSON.stringify(openPrs),
+              ],
+              { encoding: "utf8" },
+            );
+            const plan = JSON.parse(planJson);
+
+            if (plan.action === "noop") {
+              core.info(plan.body || `No PR update needed for ${featureBranch} -> develop.`);
+              return;
+            }
+
+            if (plan.action === "create") {
+              await github.rest.pulls.create({
+                owner,
+                repo,
+                title: plan.title,
+                body: plan.body,
+                head: plan.head,
+                base: plan.base,
+              });
+            } else if (plan.action === "update") {
+              await github.rest.pulls.update({
+                owner,
+                repo,
+                pull_number: plan.existing_pr_number,
+                title: plan.title,
+                body: plan.body,
+              });
+            }

@@ -1,0 +1,101 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.dylib
+*.dll
+
+# Caches and logs
+*.log
+*.cache/
+logs/
+log/
+*.out
+
+# Virtual environment / project specific files
+.venv/
+env/
+venv/
+ENV/
+.conda/
+*.conda
+etc/
+
+# Package files
+*.egg
+*.egg-info
+dist/
+build/
+*.whl
+
+# Environment variables
+.env
+
+# IDE files
+.idea/
+.vscode/
+*.vscode/
+*.code-workspace
+
+# Jupyter Notebook / IPython specific files
+.ipynb_checkpoints/
+
+# Database files
+*.db
+
+# Compiled Python files
+*.pyc
+
+# Temporary files
+*.bak
+*.swp
+*.tmp
+*.temp
+*.backup
+*.old
+
+# Config files
+*.ini
+
+# Miscellaneous
+.DS_Store
+Thumbs.db
+
+# Specific to MLflow
+mlruns/
+*.mlmodel
+model/
+artifacts/
+
+# Specific to pytest
+.pytest_cache/
+
+# Local AI agent instructions, configs, skills, and scratchpads (never push)
+AGENTS.md
+AGENTS.local.md
+CLAUDE.md
+CLAUDE.local.md
+GEMINI.md
+docs/agents/
+.agents/
+.agent/
+.claude/
+.gemini/
+.codex/
+.cursor/
+.cursorrules
+.windsurf/
+.windsurfrules
+*.pdf
+
+# Local references, planning docs, scratch, and tool caches
+docs/planning/
+docs/references/
+PRD.md
+SPEC.md
+.scratch/
+.mypy_cache/
+.ruff_cache/
+.dvc/tmp/
+feature_repo/data/
