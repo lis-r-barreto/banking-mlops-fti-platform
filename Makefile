@@ -4,13 +4,13 @@ install:
 	uv sync --extra feature --extra dev
 
 lint:
-	uv run ruff check src tests
+	uv run ruff check src tests feature_repo
 
 format-check:
-	uv run ruff format --check src tests
+	uv run ruff format --check src tests feature_repo
 
 typecheck:
-	uv run mypy src tests
+	uv run mypy src tests feature_repo
 
 test:
 	uv run pytest

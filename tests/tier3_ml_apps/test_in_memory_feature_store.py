@@ -164,3 +164,55 @@ def test_get_historical_features_performs_leak_free_point_in_time_backward_join(
     assert joined["home_ownership"].tolist() == ["OWN", "RENT"]
     assert joined["tx_amount_mavg_7d"].tolist() == [400.0, 55.0]
     assert joined["default_label"].tolist() == [1, 0]
+
+
+def test_get_historical_features_supports_exclude_labels_and_unlabelled_batch_snapshots() -> None:
+    store = InMemoryFeatureStore()
+    store.write_feature_group(
+        "customer_profiles",
+        _profiles_df(),
+        schema_hash=CUSTOMER_PROFILES_CONTRACT.schema_hash(),
+    )
+    store.write_feature_group(
+        "card_window_aggs",
+        _card_aggs_df(),
+        schema_hash=CARD_WINDOW_AGGS_CONTRACT.schema_hash(),
+    )
+    store.write_feature_group(
+        "credit_applications",
+        _credit_apps_df(),
+        schema_hash=CREDIT_APPLICATIONS_CONTRACT.schema_hash(),
+    )
+
+    entity_df = pd.DataFrame(
+        {
+            "application_id": ["APP-LATE", "APP-EARLY"],
+            "customer_id": ["CUST-1", "CUST-1"],
+            "cc_num": ["4000000000000001", "4000000000000001"],
+            "event_timestamp": pd.to_datetime(
+                ["2026-01-15T00:00:00Z", "2026-01-05T00:00:00Z"], utc=True
+            ).astype("datetime64[ns, UTC]"),
+        }
+    )
+
+    unlabelled_via_flag = store.get_historical_features(
+        entity_df,
+        ["customer_profiles", "card_window_aggs", "credit_applications"],
+        exclude_labels=True,
+    )
+    assert "default_label" not in unlabelled_via_flag.columns
+    assert unlabelled_via_flag["application_id"].tolist() == ["APP-LATE", "APP-EARLY"]
+    assert unlabelled_via_flag["loan_amount"].tolist() == [20000.0, 10000.0]
+    assert unlabelled_via_flag["home_ownership"].tolist() == ["OWN", "RENT"]
+    assert unlabelled_via_flag["tx_amount_mavg_7d"].tolist() == [400.0, 55.0]
+
+    unlabelled_apps = _credit_apps_df().drop(columns=["default_label"]).iloc[[1, 0]]
+    batch_snapshot = store.get_historical_features(
+        unlabelled_apps,
+        ["customer_profiles", "card_window_aggs"],
+    )
+    assert "default_label" not in batch_snapshot.columns
+    assert batch_snapshot["application_id"].tolist() == ["APP-LATE", "APP-EARLY"]
+    assert batch_snapshot["home_ownership"].tolist() == ["OWN", "RENT"]
+    assert batch_snapshot["tx_amount_mavg_7d"].tolist() == [400.0, 55.0]
+    assert batch_snapshot["loan_amount"].tolist() == [20000.0, 10000.0]

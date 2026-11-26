@@ -54,6 +54,8 @@ class FeatureStore(Protocol):
         self,
         entity_df: pd.DataFrame,
         feature_groups: Sequence[FeatureGroupName],
+        *,
+        exclude_labels: bool = False,
     ) -> pd.DataFrame:
         """Perform a point-in-time backward join across `feature_groups` for `entity_df`."""
         ...

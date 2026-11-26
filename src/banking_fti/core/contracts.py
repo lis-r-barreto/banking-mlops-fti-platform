@@ -50,6 +50,7 @@ class FeatureGroupContract:
     entity_keys: tuple[str, ...]
     timestamp_col: str
     feature_columns: tuple[ColumnSpec, ...]
+    label_columns: tuple[str, ...] = ()
 
     def all_columns(self) -> tuple[str, ...]:
         """Return ordered entity key, timestamp, and feature column names."""
@@ -135,6 +136,7 @@ CREDIT_APPLICATIONS_CONTRACT = FeatureGroupContract(
         ColumnSpec("pub_rec_flag", "int64"),
         ColumnSpec("default_label", "int64"),
     ),
+    label_columns=("default_label",),
 )
 
 FEATURE_GROUP_CONTRACTS: Mapping[FeatureGroupName, FeatureGroupContract] = {

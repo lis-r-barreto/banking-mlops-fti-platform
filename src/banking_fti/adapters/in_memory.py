@@ -3,33 +3,24 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
 
+from banking_fti.adapters._common import (
+    filter_by_time_bounds,
+    normalize_entity_frame,
+    prepare_write_frame,
+    resolve_join_key,
+    select_feature_columns,
+)
 from banking_fti.core.contracts import (
     EVENT_TIMESTAMP_COL,
     FEATURE_GROUP_CONTRACTS,
-    FeatureGroupContract,
     FeatureGroupName,
 )
 from banking_fti.ports.feature_store import SchemaMismatchError, WriteReceipt
-
-
-def _to_utc_timestamp(dt: datetime) -> pd.Timestamp:
-    if dt.tzinfo is None or dt.utcoffset() is None:
-        raise ValueError(f"Timestamp filter must be timezone-aware, got {dt!r}.")
-    return pd.Timestamp(dt.astimezone(UTC))
-
-
-def _resolve_join_key(entity_columns: pd.Index, contract: FeatureGroupContract) -> str:
-    for key in contract.entity_keys:
-        if key in entity_columns:
-            return key
-    raise ValueError(
-        f"entity_df is missing required join key from {contract.entity_keys} for '{contract.name}'."
-    )
 
 
 class InMemoryFeatureStore:
@@ -51,26 +42,13 @@ class InMemoryFeatureStore:
         schema_hash: str,
     ) -> WriteReceipt:
         """Validate columns and schema_hash, then append defensive copies to memory."""
-        contract = FEATURE_GROUP_CONTRACTS[group_name]
-        expected_cols = list(contract.all_columns())
-        if set(df.columns) != set(expected_cols):
-            missing = sorted(set(expected_cols) - set(df.columns))
-            extra = sorted(set(df.columns) - set(expected_cols))
-            raise ValueError(
-                f"Feature Group '{group_name}' columns mismatch: missing={missing}, extra={extra}."
-            )
-
+        ordered = prepare_write_frame(group_name, df)
         existing_hash = self._schema_hashes.get(group_name)
         if existing_hash is not None and existing_hash != schema_hash:
             raise SchemaMismatchError(
                 f"Schema hash mismatch for '{group_name}': "
                 f"expected '{existing_hash}', got '{schema_hash}'."
             )
-
-        ordered = df.loc[:, expected_cols].copy(deep=True)
-        ordered[contract.timestamp_col] = pd.to_datetime(
-            ordered[contract.timestamp_col], utc=True
-        ).dt.as_unit("ns")
 
         if existing_hash is None:
             self._schema_hashes[group_name] = schema_hash
@@ -100,37 +78,34 @@ class InMemoryFeatureStore:
         if table is None:
             return contract.empty_frame()
 
-        mask = pd.Series(True, index=table.index)
-        if start_time is not None:
-            mask &= table[contract.timestamp_col] >= _to_utc_timestamp(start_time)
-        if end_time is not None:
-            mask &= table[contract.timestamp_col] <= _to_utc_timestamp(end_time)
-
-        return table.loc[mask].copy(deep=True).reset_index(drop=True)
+        return filter_by_time_bounds(
+            table,
+            contract.timestamp_col,
+            start_time=start_time,
+            end_time=end_time,
+        )
 
     def get_historical_features(
         self,
         entity_df: pd.DataFrame,
         feature_groups: Sequence[FeatureGroupName],
+        *,
+        exclude_labels: bool = False,
     ) -> pd.DataFrame:
         """Perform leak-free backward point-in-time joins preserving `entity_df` row order."""
-        if EVENT_TIMESTAMP_COL not in entity_df.columns:
-            raise ValueError(f"entity_df must contain '{EVENT_TIMESTAMP_COL}' column.")
-
-        result = entity_df.copy(deep=True).reset_index(drop=True)
-        result[EVENT_TIMESTAMP_COL] = pd.to_datetime(
-            result[EVENT_TIMESTAMP_COL], utc=True
-        ).dt.as_unit("ns")
+        result = normalize_entity_frame(entity_df)
         result["_entity_row_order"] = np.arange(len(result), dtype=np.int64)
 
         for group_name in feature_groups:
             contract = FEATURE_GROUP_CONTRACTS[group_name]
-            join_key = _resolve_join_key(result.columns, contract)
+            join_key = resolve_join_key(result.columns, contract)
             feature_table = self.read_feature_group(group_name)
 
-            feature_cols = [
-                col.name for col in contract.feature_columns if col.name not in result.columns
-            ]
+            feature_cols = select_feature_columns(
+                contract,
+                result.columns,
+                exclude_labels=exclude_labels,
+            )
             if not feature_cols:
                 continue
 
