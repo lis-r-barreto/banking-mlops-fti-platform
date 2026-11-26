@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
-from collections.abc import Callable, Mapping
+import os
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import MappingProxyType
 from typing import Literal
 
 import numpy as np
 import pandas as pd
 
+from banking_fti.adapters.feast_store import FeastFeatureStore
 from banking_fti.core.contracts import (
     FEATURE_GROUP_CONTRACTS,
     FeatureGroupName,
@@ -24,6 +28,7 @@ from banking_fti.core.validation import (
     validate_raw_batch,
 )
 from banking_fti.features.causal_aggs import compute_card_window_aggs
+from banking_fti.features.simulator import BankingEventSimulator, SimulatorConfig
 from banking_fti.ports.feature_store import FeatureStore, WriteReceipt
 
 _LOGGER = logging.getLogger(__name__)
@@ -339,3 +344,116 @@ class FeaturePipeline:
             drift_detected=bool(findings),
             events=tuple(events),
         )
+
+
+def run_stage1_ingestion(
+    *,
+    repo_path: str | Path,
+    data_dir: str | Path | None = None,
+    num_customers: int = 120,
+    backfill_days: int = 90,
+    seed: int = 42,
+    incremental_batches: int = 1,
+    simulate_drift: bool = False,
+) -> dict[str, object]:
+    """Run deterministic Stage 1 backfill and incremental batches into FeastFeatureStore."""
+    if incremental_batches < 0:
+        raise ValueError("incremental_batches must be >= 0.")
+
+    store = FeastFeatureStore(repo_path=repo_path, data_dir=data_dir)
+    pipeline = FeaturePipeline(feature_store=store)
+    simulator = BankingEventSimulator(
+        SimulatorConfig(
+            num_customers=num_customers,
+            backfill_days=backfill_days,
+            seed=seed,
+        )
+    )
+
+    end_time = datetime(2026, 2, 1, 0, 0, tzinfo=UTC)
+    backfill = simulator.generate_backfill(end_time=end_time)
+    backfill_result = pipeline.run_batch(backfill)
+
+    rows_written: dict[str, int] = {
+        group_name: receipt.rows_written for group_name, receipt in backfill_result.receipts.items()
+    }
+    latest_result = backfill_result
+    history_events = backfill.card_events
+    any_drift = backfill_result.drift_detected
+
+    for seq in range(1, incremental_batches + 1):
+        inc_start = end_time + timedelta(hours=24 * (seq - 1))
+        apply_drift = simulate_drift and seq == incremental_batches
+        inc_batch = simulator.generate_incremental_batch(
+            start_time=inc_start,
+            window_hours=24,
+            simulate_drift=apply_drift,
+            batch_seq=seq,
+        )
+        latest_result = pipeline.run_batch(
+            inc_batch,
+            history_card_events=history_events,
+            reference_stats=backfill_result.group_stats,
+        )
+        history_events = pd.concat([history_events, inc_batch.card_events], ignore_index=True)
+        any_drift = any_drift or latest_result.drift_detected
+        for group_name, receipt in latest_result.receipts.items():
+            rows_written[group_name] += receipt.rows_written
+
+    total_rows = {
+        group_name: receipt.total_rows for group_name, receipt in latest_result.receipts.items()
+    }
+    schema_hashes = {
+        group_name: receipt.schema_hash for group_name, receipt in latest_result.receipts.items()
+    }
+    return {
+        "repo_path": str(store.repo_path),
+        "data_dir": str(store.data_dir),
+        "batches_run": 1 + incremental_batches,
+        "drift_detected": any_drift,
+        "rows_written": rows_written,
+        "total_rows": total_rows,
+        "schema_hashes": schema_hashes,
+    }
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Run Stage 1 Feature Pipeline ingestion into Feast Offline Parquet."
+    )
+    parser.add_argument(
+        "--repo-path",
+        default=os.environ.get("FEAST_REPO_PATH", "feature_repo"),
+        help="Path to the Feast repository directory.",
+    )
+    parser.add_argument(
+        "--data-dir",
+        default=os.environ.get("FEAST_DATA_DIR"),
+        help="Optional directory for Offline Parquet files and Feast registry.",
+    )
+    parser.add_argument("--num-customers", type=int, default=120)
+    parser.add_argument("--backfill-days", type=int, default=90)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--incremental-batches", type=int, default=1)
+    parser.add_argument("--simulate-drift", action="store_true")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """CLI entrypoint for containerized and local Stage 1 Feature Pipeline ingestion."""
+    args = _build_arg_parser().parse_args(argv)
+    summary = run_stage1_ingestion(
+        repo_path=args.repo_path,
+        data_dir=args.data_dir,
+        num_customers=args.num_customers,
+        backfill_days=args.backfill_days,
+        seed=args.seed,
+        incremental_batches=args.incremental_batches,
+        simulate_drift=args.simulate_drift,
+    )
+    print(json.dumps(summary, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

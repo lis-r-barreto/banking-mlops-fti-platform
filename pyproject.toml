@@ -68,5 +68,5 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = ["feast", "feast.*", "pyarrow", "pyarrow.*"]
+module = ["feast", "feast.*", "pyarrow", "pyarrow.*", "yaml"]
 ignore_missing_imports = true
