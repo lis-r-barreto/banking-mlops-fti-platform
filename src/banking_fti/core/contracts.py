@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
+import numpy as np
 import pandas as pd
 
 FeatureGroupName = Literal["customer_profiles", "card_window_aggs", "credit_applications"]
+ColumnDType = Literal["int64", "float64", "string"]
 
 EVENT_TIMESTAMP_COL = "event_timestamp"
 HOME_OWNERSHIP_VALUES: tuple[str, ...] = ("RENT", "MORTGAGE", "OWN", "OTHER")
@@ -30,7 +32,14 @@ class ColumnSpec:
     """Single feature column definition inside a canonical Feature Group contract."""
 
     name: str
-    dtype: str
+    dtype: ColumnDType
+
+
+_EMPTY_SERIES_BUILDERS: Mapping[ColumnDType, Callable[[], pd.Series]] = {
+    "int64": lambda: pd.Series([], dtype=np.int64),
+    "float64": lambda: pd.Series([], dtype=np.float64),
+    "string": lambda: pd.Series([], dtype=str),
+}
 
 
 @dataclass(frozen=True)
@@ -53,6 +62,14 @@ class FeatureGroupContract:
     def schema_hash(self) -> str:
         """Compute deterministic SHA-256 hash of this contract's structural definition."""
         return compute_schema_hash(self)
+
+    def empty_frame(self) -> pd.DataFrame:
+        """Return an empty DataFrame matching all columns and canonical dtypes."""
+        data: dict[str, pd.Series] = {key: pd.Series([], dtype=str) for key in self.entity_keys}
+        data[self.timestamp_col] = pd.Series(pd.DatetimeIndex([], tz="UTC").as_unit("ns"))
+        for col in self.feature_columns:
+            data[col.name] = _EMPTY_SERIES_BUILDERS[col.dtype]()
+        return pd.DataFrame(data).loc[:, list(self.all_columns())]
 
 
 def compute_schema_hash(contract: FeatureGroupContract) -> str:

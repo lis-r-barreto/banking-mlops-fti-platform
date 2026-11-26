@@ -23,21 +23,6 @@ def _to_utc_timestamp(dt: datetime) -> pd.Timestamp:
     return pd.Timestamp(dt.astimezone(UTC))
 
 
-def _empty_contract_frame(contract: FeatureGroupContract) -> pd.DataFrame:
-    data: dict[str, pd.Series] = {}
-    for key in contract.entity_keys:
-        data[key] = pd.Series([], dtype=str)
-    data[contract.timestamp_col] = pd.Series(pd.DatetimeIndex([], tz="UTC").as_unit("ns"))
-    for col in contract.feature_columns:
-        if col.dtype == "int64":
-            data[col.name] = pd.Series([], dtype=np.int64)
-        elif col.dtype == "float64":
-            data[col.name] = pd.Series([], dtype=np.float64)
-        else:
-            data[col.name] = pd.Series([], dtype=str)
-    return pd.DataFrame(data).loc[:, list(contract.all_columns())]
-
-
 def _resolve_join_key(entity_columns: pd.Index, contract: FeatureGroupContract) -> str:
     for key in contract.entity_keys:
         if key in entity_columns:
@@ -83,8 +68,8 @@ class InMemoryFeatureStore:
             )
 
         ordered = df.loc[:, expected_cols].copy(deep=True)
-        ordered[EVENT_TIMESTAMP_COL] = pd.to_datetime(
-            ordered[EVENT_TIMESTAMP_COL], utc=True
+        ordered[contract.timestamp_col] = pd.to_datetime(
+            ordered[contract.timestamp_col], utc=True
         ).dt.as_unit("ns")
 
         if existing_hash is None:
@@ -113,13 +98,13 @@ class InMemoryFeatureStore:
         contract = FEATURE_GROUP_CONTRACTS[group_name]
         table = self._tables.get(group_name)
         if table is None:
-            return _empty_contract_frame(contract)
+            return contract.empty_frame()
 
         mask = pd.Series(True, index=table.index)
         if start_time is not None:
-            mask &= table[EVENT_TIMESTAMP_COL] >= _to_utc_timestamp(start_time)
+            mask &= table[contract.timestamp_col] >= _to_utc_timestamp(start_time)
         if end_time is not None:
-            mask &= table[EVENT_TIMESTAMP_COL] <= _to_utc_timestamp(end_time)
+            mask &= table[contract.timestamp_col] <= _to_utc_timestamp(end_time)
 
         return table.loc[mask].copy(deep=True).reset_index(drop=True)
 

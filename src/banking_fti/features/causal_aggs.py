@@ -29,21 +29,6 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2.0 * _EARTH_RADIUS_KM * math.asin(min(1.0, math.sqrt(a)))
 
 
-def _empty_aggs_frame() -> pd.DataFrame:
-    return pd.DataFrame(
-        {
-            "cc_num": pd.Series([], dtype=str),
-            "customer_id": pd.Series([], dtype=str),
-            "event_timestamp": pd.Series(pd.DatetimeIndex([], tz="UTC").as_unit("ns")),
-            "tx_amount_mavg_7d": pd.Series([], dtype=np.float64),
-            "tx_amount_mstd_7d": pd.Series([], dtype=np.float64),
-            "tx_count_24h": pd.Series([], dtype=np.int64),
-            "tx_count_7d": pd.Series([], dtype=np.int64),
-            "loc_delta_mavg_7d": pd.Series([], dtype=np.float64),
-        }
-    ).loc[:, list(CARD_WINDOW_AGGS_CONTRACT.all_columns())]
-
-
 def compute_card_window_aggs(
     card_events: pd.DataFrame,
     *,
@@ -57,7 +42,7 @@ def compute_card_window_aggs(
     """
     n_target = len(card_events)
     if n_target == 0:
-        return _empty_aggs_frame()
+        return CARD_WINDOW_AGGS_CONTRACT.empty_frame()
 
     target_frame = card_events.reset_index(drop=True).copy()
     target_frame["_target_pos"] = np.arange(n_target, dtype=np.int64)
