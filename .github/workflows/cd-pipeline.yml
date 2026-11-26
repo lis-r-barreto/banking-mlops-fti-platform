@@ -67,7 +67,7 @@ jobs:
 
             execFileSync(
               "git",
-              ["fetch", "origin", "+refs/heads/*:refs/remotes/origin/*", "--tags", "--depth=0"],
+              ["fetch", "origin", "+refs/heads/*:refs/remotes/origin/*", "--tags"],
               { stdio: "inherit" },
             );
 

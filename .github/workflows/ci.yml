@@ -41,7 +41,7 @@ jobs:
         env:
           PR_TITLE: ${{ github.event_name == 'pull_request' && github.event.pull_request.title || '' }}
         run: |
-          git fetch origin develop --depth=0 || true
+          git fetch origin develop:refs/remotes/origin/develop || true
           if git rev-parse --verify origin/develop >/dev/null 2>&1; then
             COMMIT_RANGE="origin/develop..HEAD"
           else
@@ -89,7 +89,7 @@ jobs:
             const { owner, repo } = context.repo;
             const featureBranch = context.ref.replace("refs/heads/", "");
 
-            execFileSync("git", ["fetch", "origin", "develop", "--depth=0"], { stdio: "inherit" });
+            execFileSync("git", ["fetch", "origin", "develop:refs/remotes/origin/develop"], { stdio: "inherit" });
             const { data: openPrs } = await github.rest.pulls.list({
               owner,
               repo,
