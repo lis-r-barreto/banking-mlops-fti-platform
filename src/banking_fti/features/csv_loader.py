@@ -96,9 +96,10 @@ def download_tutorial_csvs(
         os.close(fd)
         tmp_path = Path(tmp_name)
         try:
-            with urllib.request.urlopen(url, timeout=timeout_seconds) as response, tmp_path.open(
-                "wb"
-            ) as handle:
+            with (
+                urllib.request.urlopen(url, timeout=timeout_seconds) as response,
+                tmp_path.open("wb") as handle,
+            ):
                 while chunk := response.read(65536):
                     handle.write(chunk)
             os.replace(tmp_path, dest)
@@ -162,9 +163,7 @@ def load_tutorial_csv_backfill(
     """Load real Hopsworks Tutorial CSVs from `raw_dir` into a canonical `RawBankingBatch`."""
     base = Path(raw_dir)
     if not has_tutorial_csvs(base):
-        missing = [
-            name for name in DEFAULT_TUTORIAL_CSV_URLS if not (base / name).is_file()
-        ]
+        missing = [name for name in DEFAULT_TUTORIAL_CSV_URLS if not (base / name).is_file()]
         raise FileNotFoundError(
             f"Missing tutorial CSVs in {base}: {missing}. Run `make fetch-data` first."
         )
@@ -242,8 +241,10 @@ def load_tutorial_csv_backfill(
         np.int64
     )
 
-    days_emp = pd.to_numeric(apps_sorted["days_employed"], errors="coerce").fillna(0.0).to_numpy(
-        dtype=np.float64
+    days_emp = (
+        pd.to_numeric(apps_sorted["days_employed"], errors="coerce")
+        .fillna(0.0)
+        .to_numpy(dtype=np.float64)
     )
     valid_emp = (days_emp < 0.0) & (days_emp > -365.25 * 80.0)
     employment_years = np.where(

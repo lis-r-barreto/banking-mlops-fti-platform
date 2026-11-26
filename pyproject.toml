@@ -71,3 +71,17 @@ disallow_untyped_defs = true
 [[tool.mypy.overrides]]
 module = ["feast", "feast.*", "pyarrow", "pyarrow.*", "yaml"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "lightgbm",
+    "lightgbm.*",
+    "sklearn",
+    "sklearn.*",
+    "onnxmltools",
+    "onnxmltools.*",
+    "onnxruntime",
+    "onnxruntime.*",
+    "joblib",
+]
+ignore_missing_imports = true

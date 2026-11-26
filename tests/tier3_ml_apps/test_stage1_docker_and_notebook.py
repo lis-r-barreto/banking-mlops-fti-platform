@@ -37,6 +37,8 @@ def test_feature_pipeline_cli_runs_backfill_and_incremental_drift_into_feast(
 
     exit_code = feature_pipeline_mod.main(
         [
+            "--data-source",
+            "simulator",
             "--repo-path",
             str(repo_dir),
             "--data-dir",
@@ -131,9 +133,9 @@ def _write_sample_tutorial_csvs(raw_dir: Path) -> None:
             "cc_num": cc_nums,
         }
     ).to_csv(raw_dir / "profiles.csv", index=False)
-    pd.DataFrame(
-        {"cc_num": cc_nums, "provider": ["visa"] * 6, "expires": ["05/26"] * 6}
-    ).to_csv(raw_dir / "credit_cards.csv", index=False)
+    pd.DataFrame({"cc_num": cc_nums, "provider": ["visa"] * 6, "expires": ["05/26"] * 6}).to_csv(
+        raw_dir / "credit_cards.csv", index=False
+    )
     pd.DataFrame(
         {
             "sk_id_curr": [1001, 1002, 1003, 1004, 1005, 1006],

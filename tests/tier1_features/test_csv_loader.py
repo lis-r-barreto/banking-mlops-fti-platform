@@ -163,8 +163,7 @@ def test_hybrid_incremental_batch_bootstraps_from_csv_and_triggers_drift(tmp_pat
     )
     validate_raw_batch(nominal)
     assert (
-        nominal.card_events["event_timestamp"].min()
-        > backfill.card_events["event_timestamp"].max()
+        nominal.card_events["event_timestamp"].min() > backfill.card_events["event_timestamp"].max()
     )
     assert (
         nominal.credit_applications["event_timestamp"].min()

@@ -1,7 +1,7 @@
 .PHONY: install lint format-check typecheck test check fetch-data up down notebook
 
 install:
-	uv sync --extra feature --extra dev
+	uv sync --extra feature --extra train --extra dev
 
 lint:
 	uv run ruff check src tests feature_repo
