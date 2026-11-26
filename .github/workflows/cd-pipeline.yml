@@ -1,0 +1,269 @@
+name: Banking GitFlow Pipeline CD & PR Promotion Chain
+
+on:
+  push:
+    branches:
+      - "develop"
+      - "release/v*"
+
+concurrency:
+  group: cd-pipeline-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  dev-validate:
+    name: Dev Validation (develop -> dev)
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Sync dev dependencies
+        run: uv sync --extra dev
+
+      - name: Validate protected branch and run checks
+        run: |
+          uv run python -m banking_fti.governance.cli validate-branch --branch develop --allow-protected
+          make check
+
+  open-release-pr:
+    name: Auto-Open PR (develop -> release/vX.Y.Z, Manual Merge)
+    needs: dev-validate
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Sync dev dependencies
+        run: uv sync --extra dev
+
+      - name: Compute SemVer and open or update develop -> release PR (auto-merge disabled)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { execFileSync } = require("node:child_process");
+            const { owner, repo } = context.repo;
+
+            execFileSync(
+              "git",
+              ["fetch", "origin", "+refs/heads/*:refs/remotes/origin/*", "--tags"],
+              { stdio: "inherit" },
+            );
+
+            let latestTag = "";
+            try {
+              latestTag = execFileSync(
+                "git",
+                ["describe", "--tags", "--abbrev=0", "--match", "v*", "origin/main"],
+                { encoding: "utf8" },
+              ).trim();
+            } catch {
+              latestTag = "";
+            }
+
+            const { data: refs } = await github.rest.git.listMatchingRefs({
+              owner,
+              repo,
+              ref: "heads/release/v",
+            });
+            const existingReleases = refs.map((item) => item.ref.replace("refs/heads/", ""));
+
+            const { data: openPrs } = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: "open",
+              head: `${owner}:develop`,
+            });
+
+            const activeRelease = existingReleases.sort().at(-1);
+            const cliArgs = [
+              "run",
+              "python",
+              "-m",
+              "banking_fti.governance.cli",
+              "plan-promotion",
+              "--stage",
+              "develop-to-release",
+              "--latest-tag",
+              latestTag,
+              "--commit-range",
+              "origin/main..HEAD",
+              "--existing-release-branches-json",
+              JSON.stringify(existingReleases),
+              "--open-prs-json",
+              JSON.stringify(openPrs),
+            ];
+            if (activeRelease) {
+              cliArgs.push("--release-commit-range", `origin/${activeRelease}..HEAD`);
+            }
+
+            const planJson = execFileSync("uv", cliArgs, { encoding: "utf8" });
+            const plan = JSON.parse(planJson);
+
+            if (plan.action === "noop") {
+              core.info(plan.body || "No release PR action required.");
+              return;
+            }
+
+            if (plan.create_base_from_ref) {
+              const { data: mainRef } = await github.rest.git.getRef({
+                owner,
+                repo,
+                ref: `heads/${plan.create_base_from_ref}`,
+              });
+              try {
+                await github.rest.git.createRef({
+                  owner,
+                  repo,
+                  ref: `refs/heads/${plan.base}`,
+                  sha: mainRef.object.sha,
+                });
+              } catch (err) {
+                if (err.status !== 422) {
+                  throw err;
+                }
+              }
+            }
+
+            if (plan.action === "create") {
+              await github.rest.pulls.create({
+                owner,
+                repo,
+                title: plan.title,
+                body: plan.body,
+                head: plan.head,
+                base: plan.base,
+              });
+            } else if (plan.action === "update") {
+              await github.rest.pulls.update({
+                owner,
+                repo,
+                pull_number: plan.existing_pr_number,
+                title: plan.title,
+                body: plan.body,
+              });
+            }
+
+  hom-validate:
+    name: Homologation Validation (release/v* -> hom)
+    if: startsWith(github.ref, 'refs/heads/release/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Sync dev dependencies
+        run: uv sync --extra dev
+
+      - name: Validate release branch and run checks
+        run: |
+          uv run python -m banking_fti.governance.cli validate-branch --branch "$GITHUB_REF_NAME" --allow-release
+          make check
+
+  open-main-pr:
+    name: Auto-Open PR (release/vX.Y.Z -> main, Manual Merge)
+    needs: hom-validate
+    if: startsWith(github.ref, 'refs/heads/release/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Sync dev dependencies
+        run: uv sync --extra dev
+
+      - name: Idempotently open or update release -> main PR (auto-merge disabled)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { execFileSync } = require("node:child_process");
+            const { owner, repo } = context.repo;
+            const releaseBranch = context.ref.replace("refs/heads/", "");
+
+            const { data: openPrs } = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: "open",
+              head: `${owner}:${releaseBranch}`,
+              base: "main",
+            });
+
+            const planJson = execFileSync(
+              "uv",
+              [
+                "run",
+                "python",
+                "-m",
+                "banking_fti.governance.cli",
+                "plan-promotion",
+                "--stage",
+                "release-to-main",
+                "--release-branch",
+                releaseBranch,
+                "--open-prs-json",
+                JSON.stringify(openPrs),
+              ],
+              { encoding: "utf8" },
+            );
+            const plan = JSON.parse(planJson);
+
+            if (plan.action === "create") {
+              await github.rest.pulls.create({
+                owner,
+                repo,
+                title: plan.title,
+                body: plan.body,
+                head: plan.head,
+                base: plan.base,
+              });
+            } else if (plan.action === "update") {
+              await github.rest.pulls.update({
+                owner,
+                repo,
+                pull_number: plan.existing_pr_number,
+                title: plan.title,
+                body: plan.body,
+              });
+            } else {
+              core.info(`No PR update needed for ${releaseBranch} -> main.`);
+            }
