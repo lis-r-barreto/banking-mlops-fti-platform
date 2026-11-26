@@ -451,3 +451,44 @@ def test_feature_repo_supports_native_feast_apply_in_temp_copy(tmp_path: Path) -
         "Created entity customer" in proc.stdout or (copied_repo / "data" / "registry.db").exists()
     )
     assert (copied_repo / "data" / "registry.db").exists()
+
+
+def test_feast_store_supports_customer_keyed_credit_apps_long_ttl_and_custom_data_dir(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    custom_data_dir = tmp_path / "custom_data"
+    store = FeastFeatureStore(repo_root / "feature_repo", data_dir=custom_data_dir)
+    assert (custom_data_dir / "registry.db").exists()
+    assert not (repo_root / "feature_repo" / "data").exists()
+
+    old_profile = _profiles_batch_1().copy()
+    old_profile["event_timestamp"] = pd.to_datetime(
+        ["2020-01-01T00:00:00Z", "2020-01-01T00:00:00Z"], utc=True
+    ).astype("datetime64[ns, UTC]")
+    store.write_feature_group(
+        "customer_profiles",
+        old_profile,
+        schema_hash=CUSTOMER_PROFILES_CONTRACT.schema_hash(),
+    )
+    store.write_feature_group(
+        "credit_applications",
+        _credit_apps_with_future(),
+        schema_hash=CREDIT_APPLICATIONS_CONTRACT.schema_hash(),
+    )
+
+    customer_only_entity = pd.DataFrame(
+        {
+            "customer_id": ["CUST-1"],
+            "event_timestamp": pd.to_datetime(["2026-01-16T00:00:00Z"], utc=True).astype(
+                "datetime64[ns, UTC]"
+            ),
+        }
+    )
+    joined = store.get_historical_features(
+        customer_only_entity,
+        ["customer_profiles", "credit_applications"],
+    )
+    assert joined["home_ownership"].tolist() == ["RENT"]
+    assert joined["loan_amount"].tolist() == [20000.0]
+    assert joined["default_label"].tolist() == [1]

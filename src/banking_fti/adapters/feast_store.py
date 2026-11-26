@@ -7,7 +7,7 @@ import os
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -17,14 +17,17 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from feast import Entity, FeatureView, Field, FileSource, ValueType
 from feast import FeatureStore as _FeastClient
+from feast.repo_config import load_repo_config
 from feast.types import Float64, Int64, String
 
 from banking_fti.adapters._common import (
     filter_by_time_bounds,
     normalize_entity_frame,
+    normalize_utc_ns,
     prepare_write_frame,
     resolve_join_key,
     select_feature_columns,
+    verify_schema_hash,
 )
 from banking_fti.core.contracts import (
     CARD_WINDOW_AGGS_CONTRACT,
@@ -39,7 +42,6 @@ from banking_fti.core.contracts import (
 from banking_fti.ports.feature_store import SchemaMismatchError, WriteReceipt
 
 DEFAULT_FEAST_PROJECT = "banking_fti_platform"
-FEAST_TTL = timedelta(days=365)
 _SCHEMA_HASHES_FILENAME = "_schema_hashes.json"
 
 _FEAST_DTYPES: Mapping[ColumnDType, Any] = {
@@ -70,11 +72,12 @@ class FeastEntities:
 
 @dataclass(frozen=True)
 class FeastRepoObjects:
-    """Entities, Parquet FileSources, and FeatureViews for Stage 1 PoC."""
+    """Entities, Parquet FileSources, FeatureViews, and join-key routing for Stage 1 PoC."""
 
     entities: FeastEntities
     sources: Mapping[FeatureGroupName, FileSource]
     feature_views: Mapping[str, FeatureView]
+    view_lookup: Mapping[tuple[FeatureGroupName, str], str]
 
     def apply_objects(self) -> list[Any]:
         """Return all Feast objects to register via `FeatureStore.apply`."""
@@ -152,7 +155,7 @@ def _make_feature_view(
     return FeatureView(
         name=name,
         entities=entities,
-        ttl=FEAST_TTL,
+        ttl=None,
         schema=_contract_fields(contract),
         online=False,
         offline=True,
@@ -213,8 +216,27 @@ def build_feast_objects(data_dir: Path) -> FeastRepoObjects:
             contract=CREDIT_APPLICATIONS_CONTRACT,
             source=sources["credit_applications"],
         ),
+        "credit_applications_by_customer": _make_feature_view(
+            name="credit_applications_by_customer",
+            entities=[entities.customer],
+            contract=CREDIT_APPLICATIONS_CONTRACT,
+            source=sources["credit_applications"],
+            extra_tags={"source_group": "credit_applications"},
+        ),
     }
-    return FeastRepoObjects(entities=entities, sources=sources, feature_views=feature_views)
+    view_lookup: dict[tuple[FeatureGroupName, str], str] = {
+        ("customer_profiles", "customer_id"): "customer_profiles",
+        ("card_window_aggs", "cc_num"): "card_window_aggs",
+        ("card_window_aggs", "customer_id"): "card_window_aggs_by_customer",
+        ("credit_applications", "application_id"): "credit_applications",
+        ("credit_applications", "customer_id"): "credit_applications_by_customer",
+    }
+    return FeastRepoObjects(
+        entities=entities,
+        sources=sources,
+        feature_views=feature_views,
+        view_lookup=view_lookup,
+    )
 
 
 class FeastFeatureStore:
@@ -255,7 +277,10 @@ class FeastFeatureStore:
             )
 
         self._objects = build_feast_objects(self._data_dir)
-        self._feast_store = _FeastClient(repo_path=str(self._repo_path))
+        repo_config = load_repo_config(self._repo_path, yaml_path)
+        if data_dir is not None:
+            repo_config.registry_config = str((self._data_dir / "registry.db").resolve())
+        self._feast_store = _FeastClient(config=repo_config)
         if apply_on_init:
             self.apply()
 
@@ -320,11 +345,7 @@ class FeastFeatureStore:
 
         hashes = self._load_schema_hashes()
         existing_hash = hashes.get(group_name)
-        if existing_hash is not None and existing_hash != schema_hash:
-            raise SchemaMismatchError(
-                f"Schema hash mismatch for '{group_name}': "
-                f"expected '{existing_hash}', got '{schema_hash}'."
-            )
+        verify_schema_hash(group_name, existing_hash, schema_hash)
 
         arrow_schema = _contract_arrow_schema(contract)
         new_table = pa.Table.from_pandas(ordered, schema=arrow_schema, preserve_index=False)
@@ -371,9 +392,7 @@ class FeastFeatureStore:
 
         frame = cast(pd.DataFrame, pq.read_table(parquet_path).to_pandas())
         frame = frame.loc[:, list(contract.all_columns())]
-        frame[contract.timestamp_col] = pd.to_datetime(
-            frame[contract.timestamp_col], utc=True
-        ).dt.as_unit("ns")
+        frame[contract.timestamp_col] = normalize_utc_ns(frame[contract.timestamp_col])
         return filter_by_time_bounds(
             frame,
             contract.timestamp_col,
@@ -413,11 +432,7 @@ class FeastFeatureStore:
                 unwritten_cols.extend(feature_cols)
                 continue
 
-            view_name = (
-                "card_window_aggs_by_customer"
-                if group_name == "card_window_aggs" and join_key == "customer_id"
-                else group_name
-            )
+            view_name = self._objects.view_lookup[(group_name, join_key)]
             feature_refs.extend(f"{view_name}:{col}" for col in feature_cols)
 
         if base_df.empty:
@@ -439,9 +454,7 @@ class FeastFeatureStore:
                 .drop(columns=[row_order_col])
                 .reset_index(drop=True)
             )
-            joined[EVENT_TIMESTAMP_COL] = pd.to_datetime(
-                joined[EVENT_TIMESTAMP_COL], utc=True
-            ).dt.as_unit("ns")
+            joined[EVENT_TIMESTAMP_COL] = normalize_utc_ns(joined[EVENT_TIMESTAMP_COL])
         else:
             joined = base_df.copy()
 

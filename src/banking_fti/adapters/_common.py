@@ -12,6 +12,7 @@ from banking_fti.core.contracts import (
     FeatureGroupContract,
     FeatureGroupName,
 )
+from banking_fti.ports.feature_store import SchemaMismatchError
 
 
 def to_utc_timestamp(dt: datetime) -> pd.Timestamp:
@@ -19,6 +20,24 @@ def to_utc_timestamp(dt: datetime) -> pd.Timestamp:
     if dt.tzinfo is None or dt.utcoffset() is None:
         raise ValueError(f"Timestamp filter must be timezone-aware, got {dt!r}.")
     return pd.Timestamp(dt.astimezone(UTC))
+
+
+def normalize_utc_ns(series: pd.Series) -> pd.Series:
+    """Convert a timestamp Series to UTC `datetime64[ns, UTC]`."""
+    return pd.to_datetime(series, utc=True).dt.as_unit("ns")
+
+
+def verify_schema_hash(
+    group_name: FeatureGroupName,
+    existing_hash: str | None,
+    schema_hash: str,
+) -> None:
+    """Raise `SchemaMismatchError` if an existing hash differs from `schema_hash`."""
+    if existing_hash is not None and existing_hash != schema_hash:
+        raise SchemaMismatchError(
+            f"Schema hash mismatch for '{group_name}': "
+            f"expected '{existing_hash}', got '{schema_hash}'."
+        )
 
 
 def prepare_write_frame(group_name: FeatureGroupName, df: pd.DataFrame) -> pd.DataFrame:
@@ -33,9 +52,7 @@ def prepare_write_frame(group_name: FeatureGroupName, df: pd.DataFrame) -> pd.Da
         )
 
     ordered = df.loc[:, expected_cols].copy(deep=True)
-    ordered[contract.timestamp_col] = pd.to_datetime(
-        ordered[contract.timestamp_col], utc=True
-    ).dt.as_unit("ns")
+    ordered[contract.timestamp_col] = normalize_utc_ns(ordered[contract.timestamp_col])
     return ordered
 
 
@@ -61,9 +78,7 @@ def normalize_entity_frame(entity_df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(f"entity_df must contain '{EVENT_TIMESTAMP_COL}' column.")
 
     result = entity_df.copy(deep=True).reset_index(drop=True)
-    result[EVENT_TIMESTAMP_COL] = pd.to_datetime(result[EVENT_TIMESTAMP_COL], utc=True).dt.as_unit(
-        "ns"
-    )
+    result[EVENT_TIMESTAMP_COL] = normalize_utc_ns(result[EVENT_TIMESTAMP_COL])
     return result
 
 

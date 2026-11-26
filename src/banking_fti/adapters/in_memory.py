@@ -14,13 +14,14 @@ from banking_fti.adapters._common import (
     prepare_write_frame,
     resolve_join_key,
     select_feature_columns,
+    verify_schema_hash,
 )
 from banking_fti.core.contracts import (
     EVENT_TIMESTAMP_COL,
     FEATURE_GROUP_CONTRACTS,
     FeatureGroupName,
 )
-from banking_fti.ports.feature_store import SchemaMismatchError, WriteReceipt
+from banking_fti.ports.feature_store import WriteReceipt
 
 
 class InMemoryFeatureStore:
@@ -44,11 +45,7 @@ class InMemoryFeatureStore:
         """Validate columns and schema_hash, then append defensive copies to memory."""
         ordered = prepare_write_frame(group_name, df)
         existing_hash = self._schema_hashes.get(group_name)
-        if existing_hash is not None and existing_hash != schema_hash:
-            raise SchemaMismatchError(
-                f"Schema hash mismatch for '{group_name}': "
-                f"expected '{existing_hash}', got '{schema_hash}'."
-            )
+        verify_schema_hash(group_name, existing_hash, schema_hash)
 
         if existing_hash is None:
             self._schema_hashes[group_name] = schema_hash
