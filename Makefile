@@ -1,7 +1,7 @@
 .PHONY: install lint format-check typecheck test check
 
 install:
-	uv sync --extra dev
+	uv sync --extra feature --extra dev
 
 lint:
 	uv run ruff check src tests

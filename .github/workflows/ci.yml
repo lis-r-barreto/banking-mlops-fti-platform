@@ -30,7 +30,7 @@ jobs:
           enable-cache: true
 
       - name: Sync dev dependencies
-        run: uv sync --extra dev
+        run: uv sync --extra feature --extra dev
 
       - name: Validate Conventional Branch 1.0.0 (feature/*-only)
         env:

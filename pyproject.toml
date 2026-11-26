@@ -10,10 +10,37 @@ requires-python = ">=3.12"
 dependencies = []
 
 [project.optional-dependencies]
+feature = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "pandera>=0.20",
+    "pyarrow>=17.0",
+]
+train = [
+    "lightgbm>=4.5",
+    "mlflow>=2.17",
+    "onnxmltools>=1.12",
+    "onnxruntime>=1.19",
+    "pyyaml>=6.0",
+    "scikit-learn>=1.5",
+    "skl2onnx>=1.17",
+    "xgboost>=2.1",
+]
+serve = [
+    "fastapi>=0.115",
+    "numpy>=1.26",
+    "onnxruntime>=1.19",
+    "pandas>=2.2",
+    "pandera>=0.20",
+    "pyarrow>=17.0",
+    "pydantic>=2.9",
+    "uvicorn>=0.32",
+]
 dev = [
+    "mypy>=1.13",
+    "pandas-stubs>=2.2",
     "pytest>=8.3",
     "ruff>=0.7",
-    "mypy>=1.13",
 ]
 
 [tool.hatch.build.targets.wheel]
