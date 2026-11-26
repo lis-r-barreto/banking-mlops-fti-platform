@@ -1,4 +1,4 @@
-"""Tier 3 offline round-trip tests for FeastFeatureStore (Offline Parquet) and Hopsworks seam."""
+"""Tier 3 offline round-trip tests for FeastFeatureStore (Offline Parquet)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ import pyarrow.parquet as pq
 import pytest
 
 from banking_fti.adapters.feast_store import FeastFeatureStore
-from banking_fti.adapters.hopsworks_seam import HopsworksConfig, HopsworksFeatureStore
 from banking_fti.adapters.in_memory import InMemoryFeatureStore
 from banking_fti.core.contracts import (
     CARD_WINDOW_AGGS_CONTRACT,
@@ -399,34 +398,6 @@ def test_feature_pipeline_end_to_end_round_trip_with_feast_offline_store(tmp_pat
     assert len(batch_df) == 5
     assert "default_label" not in batch_df.columns
     assert batch_df["application_id"].tolist() == unlabelled_entity_df["application_id"].tolist()
-
-
-def test_hopsworks_seam_conforms_to_feature_store_protocol_and_documents_swap_in() -> None:
-    config = HopsworksConfig(
-        project_name="banking_fti_platform",
-        host="c.app.hopsworks.ai",
-        feature_store_name="banking_fti_featurestore",
-    )
-    seam = HopsworksFeatureStore(config)
-    assert isinstance(seam, FeatureStore)
-    assert seam.config == config
-    assert seam.get_schema_hash("customer_profiles") is None
-
-    with pytest.raises(NotImplementedError, match="hsfs"):
-        seam.write_feature_group(
-            "customer_profiles",
-            _profiles_batch_1(),
-            schema_hash=CUSTOMER_PROFILES_CONTRACT.schema_hash(),
-        )
-
-    with pytest.raises(NotImplementedError, match="hsfs"):
-        seam.read_feature_group("customer_profiles")
-
-    with pytest.raises(NotImplementedError, match="hsfs"):
-        seam.get_historical_features(
-            _profiles_batch_1().loc[:, ["customer_id", "event_timestamp"]],
-            ["customer_profiles"],
-        )
 
 
 def test_feature_repo_supports_native_feast_apply_in_temp_copy(tmp_path: Path) -> None:

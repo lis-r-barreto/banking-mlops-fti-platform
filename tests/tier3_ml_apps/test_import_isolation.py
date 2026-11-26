@@ -31,7 +31,6 @@ def test_feature_pipeline_runtime_never_imports_ml_training_or_serving_libs(
         "import sys\n"
         "from datetime import datetime, timezone\n"
         "from banking_fti.adapters.feast_store import FeastFeatureStore\n"
-        "from banking_fti.adapters.hopsworks_seam import HopsworksConfig, HopsworksFeatureStore\n"
         "from banking_fti.adapters.in_memory import InMemoryFeatureStore\n"
         "from banking_fti.core import contracts, validation\n"
         "from banking_fti.features import causal_aggs, pipeline, simulator\n"
@@ -43,7 +42,6 @@ def test_feature_pipeline_runtime_never_imports_ml_training_or_serving_libs(
         "fp.run_batch(batch)\n"
         f"feast_store = FeastFeatureStore({str(feast_repo)!r})\n"
         "pipeline.FeaturePipeline(feast_store).run_batch(batch)\n"
-        "HopsworksFeatureStore(HopsworksConfig(project_name='banking_fti'))\n"
         "loaded = sorted(name for name in sys.modules)\n"
         "print('\\n'.join(loaded))\n"
     )
