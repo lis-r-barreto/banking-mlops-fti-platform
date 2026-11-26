@@ -350,6 +350,7 @@ class Stage1IngestionSummary:
 
     repo_path: str
     data_dir: str
+    data_source: str
     batches_run: int
     drift_detected: bool
     rows_written: Mapping[FeatureGroupName, int]
@@ -361,6 +362,7 @@ class Stage1IngestionSummary:
         return {
             "repo_path": self.repo_path,
             "data_dir": self.data_dir,
+            "data_source": self.data_source,
             "batches_run": self.batches_run,
             "drift_detected": self.drift_detected,
             "rows_written": dict(self.rows_written),
@@ -373,6 +375,8 @@ def run_stage1_ingestion(
     *,
     repo_path: str | Path,
     data_dir: str | Path | None = None,
+    data_source: Literal["auto", "csv", "simulator"] = "auto",
+    raw_dir: str | Path | None = None,
     num_customers: int = 120,
     backfill_days: int = 90,
     seed: int = 42,
@@ -384,20 +388,37 @@ def run_stage1_ingestion(
         raise ValueError("incremental_batches must be >= 0.")
 
     from banking_fti.adapters.feast_store import FeastFeatureStore
+    from banking_fti.features.csv_loader import (
+        generate_incremental_from_backfill,
+        has_tutorial_csvs,
+        load_tutorial_csv_backfill,
+    )
     from banking_fti.features.simulator import BankingEventSimulator, SimulatorConfig
+
+    resolved_raw_dir = Path(raw_dir) if raw_dir is not None else Path("data/raw")
+    resolved_source: Literal["csv", "simulator"]
+    if data_source == "auto":
+        resolved_source = "csv" if has_tutorial_csvs(resolved_raw_dir) else "simulator"
+    else:
+        resolved_source = data_source
 
     store = FeastFeatureStore(repo_path=repo_path, data_dir=data_dir)
     pipeline = FeaturePipeline(feature_store=store)
-    simulator = BankingEventSimulator(
-        SimulatorConfig(
-            num_customers=num_customers,
-            backfill_days=backfill_days,
-            seed=seed,
-        )
-    )
 
-    end_time = datetime(2026, 2, 1, 0, 0, tzinfo=UTC)
-    backfill = simulator.generate_backfill(end_time=end_time)
+    if resolved_source == "csv":
+        backfill = load_tutorial_csv_backfill(resolved_raw_dir)
+        simulator: BankingEventSimulator | None = None
+    else:
+        simulator = BankingEventSimulator(
+            SimulatorConfig(
+                num_customers=num_customers,
+                backfill_days=backfill_days,
+                seed=seed,
+            )
+        )
+        end_time = datetime(2026, 2, 1, 0, 0, tzinfo=UTC)
+        backfill = simulator.generate_backfill(end_time=end_time)
+
     backfill_result = pipeline.run_batch(backfill)
 
     rows_written: dict[FeatureGroupName, int] = {
@@ -405,23 +426,34 @@ def run_stage1_ingestion(
     }
     latest_result = backfill_result
     history_events = backfill.card_events
+    latest_batch = backfill
     any_drift = backfill_result.drift_detected
 
     for seq in range(1, incremental_batches + 1):
-        inc_start = end_time + timedelta(hours=24 * (seq - 1))
         apply_drift = simulate_drift and seq == incremental_batches
-        inc_batch = simulator.generate_incremental_batch(
-            start_time=inc_start,
-            window_hours=24,
-            simulate_drift=apply_drift,
-            batch_seq=seq,
-        )
+        if simulator is None:
+            inc_batch = generate_incremental_from_backfill(
+                latest_batch,
+                window_hours=24,
+                simulate_drift=apply_drift,
+                batch_seq=seq,
+                seed=seed,
+            )
+        else:
+            inc_start = datetime(2026, 2, 1, 0, 0, tzinfo=UTC) + timedelta(hours=24 * (seq - 1))
+            inc_batch = simulator.generate_incremental_batch(
+                start_time=inc_start,
+                window_hours=24,
+                simulate_drift=apply_drift,
+                batch_seq=seq,
+            )
         latest_result = pipeline.run_batch(
             inc_batch,
             history_card_events=history_events,
             reference_stats=backfill_result.group_stats,
         )
         history_events = pd.concat([history_events, inc_batch.card_events], ignore_index=True)
+        latest_batch = inc_batch
         any_drift = any_drift or latest_result.drift_detected
         for group_name, receipt in latest_result.receipts.items():
             rows_written[group_name] += receipt.rows_written
@@ -435,6 +467,7 @@ def run_stage1_ingestion(
     return Stage1IngestionSummary(
         repo_path=str(store.repo_path),
         data_dir=str(store.data_dir),
+        data_source=resolved_source,
         batches_run=1 + incremental_batches,
         drift_detected=any_drift,
         rows_written=MappingProxyType(rows_written),
@@ -457,6 +490,17 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=os.environ.get("FEAST_DATA_DIR"),
         help="Optional directory for Offline Parquet files and Feast registry.",
     )
+    parser.add_argument(
+        "--data-source",
+        choices=("auto", "csv", "simulator"),
+        default="auto",
+        help="Backfill source: tutorial CSVs, synthetic simulator, or auto-detect.",
+    )
+    parser.add_argument(
+        "--raw-dir",
+        default=os.environ.get("RAW_DATA_DIR", "data/raw"),
+        help="Directory containing downloaded Hopsworks Tutorial CSV files.",
+    )
     parser.add_argument("--num-customers", type=int, default=120)
     parser.add_argument("--backfill-days", type=int, default=90)
     parser.add_argument("--seed", type=int, default=42)
@@ -471,6 +515,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     summary = run_stage1_ingestion(
         repo_path=args.repo_path,
         data_dir=args.data_dir,
+        data_source=args.data_source,
+        raw_dir=args.raw_dir,
         num_customers=args.num_customers,
         backfill_days=args.backfill_days,
         seed=args.seed,

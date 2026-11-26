@@ -1,4 +1,4 @@
-.PHONY: install lint format-check typecheck test check up down notebook
+.PHONY: install lint format-check typecheck test check fetch-data up down notebook
 
 install:
 	uv sync --extra feature --extra dev
@@ -16,6 +16,9 @@ test:
 	uv run pytest
 
 check: lint format-check typecheck test
+
+fetch-data:
+	uv run python -m banking_fti.features.csv_loader --raw-dir data/raw
 
 up:
 	docker compose up --build -d

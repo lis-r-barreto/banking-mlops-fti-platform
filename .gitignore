@@ -98,4 +98,5 @@ SPEC.md
 .mypy_cache/
 .ruff_cache/
 .dvc/tmp/
+data/raw/
 feature_repo/data/

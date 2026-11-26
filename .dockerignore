@@ -6,6 +6,7 @@
 .ruff_cache/
 .scratch/
 .dvc/
+data/raw/
 docs/planning/
 docs/references/
 docs/agents/

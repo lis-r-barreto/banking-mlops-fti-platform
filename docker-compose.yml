@@ -1,6 +1,7 @@
 x-feast-env: &feast-env
   FEAST_REPO_PATH: /app/feature_repo
   FEAST_DATA_DIR: /app/feature_repo/data
+  RAW_DATA_DIR: /app/data/raw
 
 services:
   feast:
@@ -20,6 +21,7 @@ services:
         condition: service_completed_successfully
     environment: *feast-env
     volumes:
+      - ./data/raw:/app/data/raw:ro
       - feast_data:/app/feature_repo/data
 
   notebook:
@@ -36,6 +38,7 @@ services:
       - ./notebooks:/app/notebooks
       - ./feature_repo:/app/feature_repo
       - ./src:/app/src
+      - ./data/raw:/app/data/raw:ro
       - feast_data:/app/feature_repo/data
 
 volumes:

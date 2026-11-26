@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
 import yaml
 
+from banking_fti.adapters import FeastFeatureStore
 from banking_fti.features import pipeline as feature_pipeline_mod
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -105,8 +109,114 @@ def test_stage1_dockerfiles_and_compose_wire_feast_feature_and_notebook() -> Non
     )
 
     makefile_text = (_REPO_ROOT / "Makefile").read_text(encoding="utf-8")
-    for target in ("up:", "down:", "notebook:"):
+    for target in ("fetch-data:", "up:", "down:", "notebook:"):
         assert target in makefile_text
+
+    assert compose["services"]["feature"]["environment"]["RAW_DATA_DIR"] == "/app/data/raw"
+    assert "./data/raw:/app/data/raw:ro" in compose["services"]["feature"]["volumes"]
+    assert "./data/raw:/app/data/raw:ro" in notebook_volumes
+
+
+def _write_sample_tutorial_csvs(raw_dir: Path) -> None:
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    cc_nums = [f"400000000000000{i}" for i in range(1, 7)]
+    pd.DataFrame(
+        {
+            "name": [f"Customer {i}" for i in range(1, 7)],
+            "sex": ["F", "M", "F", "M", "F", "F"],
+            "mail": [f"c{i}@example.com" for i in range(1, 7)],
+            "birthdate": ["1988-01-01"] * 6,
+            "City": ["Austin"] * 6,
+            "Country": ["US"] * 6,
+            "cc_num": cc_nums,
+        }
+    ).to_csv(raw_dir / "profiles.csv", index=False)
+    pd.DataFrame(
+        {"cc_num": cc_nums, "provider": ["visa"] * 6, "expires": ["05/26"] * 6}
+    ).to_csv(raw_dir / "credit_cards.csv", index=False)
+    pd.DataFrame(
+        {
+            "sk_id_curr": [1001, 1002, 1003, 1004, 1005, 1006],
+            "target": [0, 1, 0, 1, 0, 0],
+            "amt_income_total": [180000.0, 65000.0, 120000.0, 50000.0, 95000.0, 140000.0],
+            "amt_credit": [450000.0, 320000.0, 240000.0, 180000.0, 300000.0, 500000.0],
+            "amt_annuity": [22500.0, 16000.0, np.nan, 9000.0, 15000.0, 25000.0],
+            "amt_goods_price": [400000.0, 300000.0, 220000.0, 160000.0, 280000.0, 450000.0],
+            "name_housing_type": ["House / apartment", "Rented apartment"] * 3,
+            "flag_own_realty": ["Y", "N"] * 3,
+            "days_birth": [-12000] * 6,
+            "days_employed": [-2500, -900, -1500, 365243, -3600, -800],
+            "days_registration": [-3000] * 6,
+            "def_30_cnt_social_circle": [0.0, 1.0, 0.0, 2.0, 0.0, 0.0],
+            "amt_req_credit_bureau_year": [1.0, 4.0, 0.0, 1.0, 2.0, 0.0],
+            "ext_source_2": [0.7, 0.2, 0.6, 0.2, 0.5, 0.8],
+            "datetime": [f"2021-0{i}-01 00:00:00" for i in range(1, 7)],
+        }
+    ).to_csv(raw_dir / "applications.csv", index=False)
+
+    tx_rows = []
+    base_ts = datetime(2022, 1, 1, 0, 0, tzinfo=UTC)
+    for day in range(25):
+        for idx, cc in enumerate(cc_nums):
+            tx_rows.append(
+                {
+                    "tid": f"tx-{day}-{idx}",
+                    "datetime": (base_ts + timedelta(days=day, hours=idx)).strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    ),
+                    "cc_num": cc,
+                    "category": "Shopping",
+                    "amount": 50.0 + (day % 5) * 3.0 + idx * 4.0,
+                    "latitude": 40.7 + idx * 0.1,
+                    "longitude": -74.0 - idx * 0.1,
+                    "city": "New York",
+                    "country": "US",
+                    "fraud_label": 0,
+                }
+            )
+    pd.DataFrame(tx_rows).to_csv(raw_dir / "transactions.csv", index=False)
+
+
+def test_feature_pipeline_cli_supports_csv_data_source_and_feast_join(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    raw_dir = tmp_path / "raw_csvs"
+    repo_dir = tmp_path / "feast_repo"
+    data_dir = tmp_path / "feast_data"
+    _write_sample_tutorial_csvs(raw_dir)
+
+    exit_code = feature_pipeline_mod.main(
+        [
+            "--data-source",
+            "csv",
+            "--raw-dir",
+            str(raw_dir),
+            "--repo-path",
+            str(repo_dir),
+            "--data-dir",
+            str(data_dir),
+            "--incremental-batches",
+            "1",
+            "--simulate-drift",
+        ]
+    )
+    assert exit_code == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["data_source"] == "csv"
+    assert payload["batches_run"] == 2
+    assert payload["drift_detected"] is True
+
+    store = FeastFeatureStore(repo_dir, data_dir=data_dir)
+    apps = store.read_feature_group("credit_applications")
+    joined = store.get_historical_features(
+        apps.loc[:, ["application_id", "customer_id", "event_timestamp"]],
+        ["customer_profiles", "card_window_aggs", "credit_applications"],
+    )
+    assert not joined["home_ownership"].isna().any()
+    assert not joined["tx_amount_mavg_7d"].isna().any()
+    assert "default_label" in joined.columns
 
 
 def test_stage1_validation_notebook_executes_end_to_end_offline(
