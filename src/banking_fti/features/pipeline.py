@@ -16,7 +16,6 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
-from banking_fti.adapters.feast_store import FeastFeatureStore
 from banking_fti.core.contracts import (
     FEATURE_GROUP_CONTRACTS,
     FeatureGroupName,
@@ -28,7 +27,6 @@ from banking_fti.core.validation import (
     validate_raw_batch,
 )
 from banking_fti.features.causal_aggs import compute_card_window_aggs
-from banking_fti.features.simulator import BankingEventSimulator, SimulatorConfig
 from banking_fti.ports.feature_store import FeatureStore, WriteReceipt
 
 _LOGGER = logging.getLogger(__name__)
@@ -346,6 +344,31 @@ class FeaturePipeline:
         )
 
 
+@dataclass(frozen=True)
+class Stage1IngestionSummary:
+    """Typed execution summary emitted by `run_stage1_ingestion` and the CLI."""
+
+    repo_path: str
+    data_dir: str
+    batches_run: int
+    drift_detected: bool
+    rows_written: Mapping[FeatureGroupName, int]
+    total_rows: Mapping[FeatureGroupName, int]
+    schema_hashes: Mapping[FeatureGroupName, str]
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize ingestion summary to a JSON-compatible dictionary."""
+        return {
+            "repo_path": self.repo_path,
+            "data_dir": self.data_dir,
+            "batches_run": self.batches_run,
+            "drift_detected": self.drift_detected,
+            "rows_written": dict(self.rows_written),
+            "total_rows": dict(self.total_rows),
+            "schema_hashes": dict(self.schema_hashes),
+        }
+
+
 def run_stage1_ingestion(
     *,
     repo_path: str | Path,
@@ -355,10 +378,13 @@ def run_stage1_ingestion(
     seed: int = 42,
     incremental_batches: int = 1,
     simulate_drift: bool = False,
-) -> dict[str, object]:
+) -> Stage1IngestionSummary:
     """Run deterministic Stage 1 backfill and incremental batches into FeastFeatureStore."""
     if incremental_batches < 0:
         raise ValueError("incremental_batches must be >= 0.")
+
+    from banking_fti.adapters.feast_store import FeastFeatureStore
+    from banking_fti.features.simulator import BankingEventSimulator, SimulatorConfig
 
     store = FeastFeatureStore(repo_path=repo_path, data_dir=data_dir)
     pipeline = FeaturePipeline(feature_store=store)
@@ -374,7 +400,7 @@ def run_stage1_ingestion(
     backfill = simulator.generate_backfill(end_time=end_time)
     backfill_result = pipeline.run_batch(backfill)
 
-    rows_written: dict[str, int] = {
+    rows_written: dict[FeatureGroupName, int] = {
         group_name: receipt.rows_written for group_name, receipt in backfill_result.receipts.items()
     }
     latest_result = backfill_result
@@ -406,15 +432,15 @@ def run_stage1_ingestion(
     schema_hashes = {
         group_name: receipt.schema_hash for group_name, receipt in latest_result.receipts.items()
     }
-    return {
-        "repo_path": str(store.repo_path),
-        "data_dir": str(store.data_dir),
-        "batches_run": 1 + incremental_batches,
-        "drift_detected": any_drift,
-        "rows_written": rows_written,
-        "total_rows": total_rows,
-        "schema_hashes": schema_hashes,
-    }
+    return Stage1IngestionSummary(
+        repo_path=str(store.repo_path),
+        data_dir=str(store.data_dir),
+        batches_run=1 + incremental_batches,
+        drift_detected=any_drift,
+        rows_written=MappingProxyType(rows_written),
+        total_rows=MappingProxyType(total_rows),
+        schema_hashes=MappingProxyType(schema_hashes),
+    )
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -451,7 +477,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         incremental_batches=args.incremental_batches,
         simulate_drift=args.simulate_drift,
     )
-    print(json.dumps(summary, sort_keys=True))
+    print(json.dumps(summary.to_dict(), sort_keys=True))
     return 0
 
 

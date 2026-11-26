@@ -308,6 +308,7 @@ dev = [
     { name = "mypy" },
     { name = "pandas-stubs" },
     { name = "pytest" },
+    { name = "pyyaml" },
     { name = "ruff" },
 ]
 feature = [
@@ -359,6 +360,7 @@ requires-dist = [
     { name = "pyarrow", marker = "extra == 'serve'", specifier = ">=17.0" },
     { name = "pydantic", marker = "extra == 'serve'", specifier = ">=2.9" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3" },
+    { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "pyyaml", marker = "extra == 'train'", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.7" },
     { name = "scikit-learn", marker = "extra == 'train'", specifier = ">=1.5" },

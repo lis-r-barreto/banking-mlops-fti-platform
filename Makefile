@@ -1,4 +1,4 @@
-.PHONY: install lint format-check typecheck test check up down notebook smoke-stage1
+.PHONY: install lint format-check typecheck test check up down notebook
 
 install:
 	uv sync --extra feature --extra dev
@@ -25,6 +25,3 @@ down:
 
 notebook:
 	docker compose up --build notebook
-
-smoke-stage1:
-	docker compose run --rm feast && docker compose run --rm feature

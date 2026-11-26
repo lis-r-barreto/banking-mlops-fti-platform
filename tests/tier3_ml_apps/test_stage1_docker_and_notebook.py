@@ -96,10 +96,16 @@ def test_stage1_dockerfiles_and_compose_wire_feast_feature_and_notebook() -> Non
         == "service_completed_successfully"
     )
     assert "8888:8888" in services["notebook"]["ports"]
-    assert "./notebooks:/app/notebooks" in services["notebook"]["volumes"]
+    notebook_volumes = services["notebook"]["volumes"]
+    assert "./notebooks:/app/notebooks" in notebook_volumes
+    assert "./feature_repo:/app/feature_repo" in notebook_volumes
+    assert "./src:/app/src" in notebook_volumes
+    assert notebook_volumes.index("./feature_repo:/app/feature_repo") < notebook_volumes.index(
+        "feast_data:/app/feature_repo/data"
+    )
 
     makefile_text = (_REPO_ROOT / "Makefile").read_text(encoding="utf-8")
-    for target in ("up:", "down:", "notebook:", "smoke-stage1:"):
+    for target in ("up:", "down:", "notebook:"):
         assert target in makefile_text
 
 
@@ -115,9 +121,11 @@ def test_stage1_validation_notebook_executes_end_to_end_offline(
     code_cells = [cell for cell in nb["cells"] if cell["cell_type"] == "code"]
     assert len(code_cells) >= 4
 
-    data_dir = tmp_path / "nb_feast_data"
+    shared_dir = tmp_path / "shared_feast_data"
+    sandbox_dir = tmp_path / "nb_sandbox_data"
     monkeypatch.setenv("FEAST_REPO_PATH", str(_REPO_ROOT / "feature_repo"))
-    monkeypatch.setenv("FEAST_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("FEAST_DATA_DIR", str(shared_dir))
+    monkeypatch.setenv("FEAST_NOTEBOOK_SANDBOX_DIR", str(sandbox_dir))
 
     namespace: dict[str, object] = {}
     for cell in code_cells:
@@ -132,4 +140,5 @@ def test_stage1_validation_notebook_executes_end_to_end_offline(
     assert namespace["drift_detected_on_inc"] is True
     assert namespace["train_has_label"] is True
     assert namespace["batch_omits_label"] is True
+    assert not (shared_dir / "credit_applications.parquet").exists()
     assert not (_REPO_ROOT / "feature_repo" / "data").exists()
