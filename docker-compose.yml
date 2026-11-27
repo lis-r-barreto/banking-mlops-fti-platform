@@ -1,0 +1,58 @@
+x-feast-env: &feast-env
+  FEAST_REPO_PATH: /app/feature_repo
+  FEAST_DATA_DIR: /app/feature_repo/data
+  RAW_DATA_DIR: /app/data/raw
+
+services:
+  feast:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.feast
+    environment: *feast-env
+    volumes:
+      - feast_data:/app/feature_repo/data
+
+  feature:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.feature
+    depends_on:
+      feast:
+        condition: service_completed_successfully
+    environment: *feast-env
+    volumes:
+      - ./data/raw:/app/data/raw:ro
+      - feast_data:/app/feature_repo/data
+
+  feast-ui:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.feast-ui
+    depends_on:
+      feast:
+        condition: service_completed_successfully
+    environment: *feast-env
+    ports:
+      - "8889:8888"
+    volumes:
+      - feast_data:/app/feature_repo/data
+
+  notebook:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.notebook
+    depends_on:
+      feature:
+        condition: service_completed_successfully
+    environment: *feast-env
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./notebooks:/app/notebooks
+      - ./feature_repo:/app/feature_repo
+      - ./src:/app/src
+      - ./data/raw:/app/data/raw:ro
+      - feast_data:/app/feature_repo/data
+
+volumes:
+  feast_data: {}

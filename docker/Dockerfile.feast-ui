@@ -1,0 +1,23 @@
+FROM python:3.12-slim
+
+COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /uvx /bin/
+
+WORKDIR /app
+
+ENV UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/app/.venv \
+    PATH="/app/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1
+
+COPY pyproject.toml uv.lock README.md ./
+COPY src ./src
+COPY feature_repo ./feature_repo
+
+RUN uv sync --frozen --no-dev --extra feature && \
+    uv pip install --python /app/.venv/bin/python \
+    "streamlit>=1.35" "grpcio>=1.56.2" "grpcio-reflection>=1.56.2" \
+    "grpcio-health-checking>=1.56.2"
+
+EXPOSE 8888
+
+CMD ["feast", "-c", "/app/feature_repo", "ui", "--host", "0.0.0.0", "--port", "8888"]
