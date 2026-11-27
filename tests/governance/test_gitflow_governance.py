@@ -534,8 +534,7 @@ def test_cd_pipeline_workflow_tags_main_releases_and_excludes_merged_release_bra
     )
     assert "resolve-release-tag" in tag_steps_text
     assert "refs/tags/" in tag_steps_text
-    assert "deleteRef" in tag_steps_text
-    assert "heads/release/" in tag_steps_text
+    assert "deleteRef" not in tag_steps_text
 
 
 def test_plan_develop_to_release_pr_bumps_past_released_main_commits_when_branch_deleted() -> None:
