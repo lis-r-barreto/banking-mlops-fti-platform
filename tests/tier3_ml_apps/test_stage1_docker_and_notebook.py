@@ -85,7 +85,7 @@ def test_stage1_dockerfiles_and_compose_wire_feast_feature_and_notebook() -> Non
     assert "feast_data" in compose["volumes"]
 
     services = compose["services"]
-    assert set(services.keys()) == {"feast", "feature", "notebook"}
+    assert set(services.keys()) == {"feast", "feature", "notebook", "feast-ui"}
 
     for svc_name in ("feast", "feature", "notebook"):
         assert "feast_data:/app/feature_repo/data" in services[svc_name]["volumes"]
