@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import numpy as np
 import pandas as pd
 
 from banking_fti.training.preprocessor import TabularPreprocessor
@@ -81,3 +84,53 @@ def test_fit_uses_training_split_only() -> None:
     assert X_train.shape[1] == X_holdout.shape[1]
     assert X_train.shape[0] == len(train_df)
     assert X_holdout.shape[0] == len(holdout_df)
+
+
+def test_fit_excludes_entity_keys_and_timestamps_and_imputes_missing_values() -> None:
+    train_df = pd.DataFrame(
+        {
+            "application_id": ["app-1", "app-2", "app-3"],
+            "customer_id": ["cust-1", "cust-2", "cust-3"],
+            "cc_num": ["4000000000000001", "4000000000000002", "4000000000000003"],
+            "event_timestamp": pd.to_datetime(["2026-01-01", "2026-01-02", "2026-01-03"], utc=True),
+            "loan_amount": [100000.0, np.nan, 300000.0],
+            "home_ownership": ["RENT", None, "OWN"],
+            "default_label": [0, 1, 0],
+        }
+    )
+    preprocessor = TabularPreprocessor()
+    X_train, y_train = preprocessor.fit_transform(train_df)
+
+    assert X_train.dtype == np.float32
+    assert np.isfinite(X_train).all()
+    assert y_train.tolist() == [0, 1, 0]
+    assert not any(
+        col in name
+        for name in preprocessor.feature_names
+        for col in ("application_id", "customer_id", "cc_num", "event_timestamp")
+    )
+
+
+def test_transform_features_and_save_load_roundtrip(tmp_path: Path) -> None:
+    train_df = pd.DataFrame(
+        {
+            "application_id": ["app-1", "app-2", "app-3"],
+            "customer_id": ["cust-1", "cust-2", "cust-3"],
+            "event_timestamp": pd.to_datetime(["2026-01-01", "2026-01-02", "2026-01-03"], utc=True),
+            "loan_amount": [100000.0, 200000.0, 300000.0],
+            "home_ownership": ["RENT", "MORTGAGE", "OWN"],
+            "default_label": [0, 1, 0],
+        }
+    )
+    unlabelled_df = train_df.drop(columns=["default_label"]).copy()
+
+    preprocessor = TabularPreprocessor()
+    preprocessor.fit(train_df)
+    saved_path = tmp_path / "preprocessor.joblib"
+    preprocessor.save(saved_path)
+    loaded = TabularPreprocessor.load(saved_path)
+
+    X_orig = preprocessor.transform_features(unlabelled_df)
+    X_loaded = loaded.transform_features(unlabelled_df)
+    assert X_loaded.dtype == np.float32
+    assert np.array_equal(X_orig, X_loaded)

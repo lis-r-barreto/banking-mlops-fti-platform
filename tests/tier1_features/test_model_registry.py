@@ -146,3 +146,51 @@ def test_rollback_without_previous_fails() -> None:
     champion = registry.get_champion("credit_risk_batch")  # type: ignore[assignment]
     assert champion is not None
     assert champion.version == 1
+
+
+def test_register_challenger_assigns_monotonic_versions_and_preserves_lineage() -> None:
+    registry = InMemoryModelRegistry()
+
+    first = registry.register_challenger(
+        RegisteredModel(
+            model_name="credit_risk_batch",
+            version=0,
+            status="challenger",
+            run_id="run-1",
+            created_at="2026-01-01T00:00:00+00:00",
+            feature_view_name="credit_applications",
+            feature_view_version="v1",
+            feature_schema_hash="hash-1",
+            dataset_sha256="sha-1",
+            native_model_path="model.txt",
+            onnx_model_path="model.onnx",
+            preprocessor_path="preprocessor.joblib",
+            dvc_lock_hash="dvc-123",
+            metrics={"roc_auc": 0.84, "default_recall": 0.72, "min_cohort_recall": 0.65},
+        )
+    )
+    second = registry.register_challenger(
+        RegisteredModel(
+            model_name="credit_risk_batch",
+            version=0,
+            status="challenger",
+            run_id="run-2",
+            created_at="2026-01-02T00:00:00+00:00",
+            feature_view_name="credit_applications",
+            feature_view_version="v1",
+            feature_schema_hash="hash-1",
+            dataset_sha256="sha-2",
+            native_model_path="model2.txt",
+            onnx_model_path="model2.onnx",
+            preprocessor_path="preprocessor2.joblib",
+            dvc_lock_hash="dvc-456",
+            metrics={"roc_auc": 0.86},
+        )
+    )
+
+    assert first.version == 1
+    assert first.dvc_lock_hash == "dvc-123"
+    assert first.metrics["roc_auc"] == 0.84
+    assert second.version == 2
+    assert second.dvc_lock_hash == "dvc-456"
+    assert registry.get_challenger("credit_risk_batch") == second

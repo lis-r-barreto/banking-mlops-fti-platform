@@ -1,4 +1,4 @@
-.PHONY: install lint format-check typecheck test check fetch-data up down notebook feast-ui
+.PHONY: install lint format-check typecheck test check fetch-data up down notebook feast-ui train
 
 install:
 	uv sync --extra feature --extra train --extra dev
@@ -31,3 +31,6 @@ notebook:
 
 feast-ui:
 	docker compose up --build feast-ui
+
+train:
+	docker compose up --build train

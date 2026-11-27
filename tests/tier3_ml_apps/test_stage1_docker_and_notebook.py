@@ -70,6 +70,7 @@ def test_stage1_dockerfiles_and_compose_wire_feast_feature_and_notebook() -> Non
         _REPO_ROOT / "docker" / "Dockerfile.feast",
         _REPO_ROOT / "docker" / "Dockerfile.feature",
         _REPO_ROOT / "docker" / "Dockerfile.notebook",
+        _REPO_ROOT / "docker" / "Dockerfile.train",
         _REPO_ROOT / "docker-compose.yml",
     ]
     for path in required_files:
@@ -81,13 +82,19 @@ def test_stage1_dockerfiles_and_compose_wire_feast_feature_and_notebook() -> Non
         for forbidden in _FORBIDDEN_CONTAINER_TOKENS:
             assert forbidden not in content
 
+    train_dockerfile = (_REPO_ROOT / "docker" / "Dockerfile.train").read_text(encoding="utf-8")
+    assert "libgomp1" in train_dockerfile
+    assert "--extra feature --extra train" in train_dockerfile
+    assert "banking_fti.training.pipeline" in train_dockerfile
+
     compose = yaml.safe_load((_REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
     assert "feast_data" in compose["volumes"]
+    assert "model_artifacts" in compose["volumes"]
 
     services = compose["services"]
-    assert set(services.keys()) == {"feast", "feature", "notebook", "feast-ui"}
+    assert set(services.keys()) == {"feast", "feature", "notebook", "feast-ui", "train"}
 
-    for svc_name in ("feast", "feature", "notebook"):
+    for svc_name in ("feast", "feature", "notebook", "train"):
         assert "feast_data:/app/feature_repo/data" in services[svc_name]["volumes"]
         env_entries = services[svc_name].get("environment", {})
         env_keys = list(env_entries.keys()) if isinstance(env_entries, dict) else list(env_entries)
@@ -97,6 +104,11 @@ def test_stage1_dockerfiles_and_compose_wire_feast_feature_and_notebook() -> Non
     assert (
         services["feature"]["depends_on"]["feast"]["condition"] == "service_completed_successfully"
     )
+    assert (
+        services["train"]["depends_on"]["feature"]["condition"] == "service_completed_successfully"
+    )
+    assert "model_artifacts:/app/artifacts/models" in services["train"]["volumes"]
+    assert services["train"]["environment"]["MODEL_ARTIFACT_DIR"] == "/app/artifacts/models"
     assert (
         services["notebook"]["depends_on"]["feature"]["condition"]
         == "service_completed_successfully"
@@ -111,7 +123,7 @@ def test_stage1_dockerfiles_and_compose_wire_feast_feature_and_notebook() -> Non
     )
 
     makefile_text = (_REPO_ROOT / "Makefile").read_text(encoding="utf-8")
-    for target in ("fetch-data:", "up:", "down:", "notebook:"):
+    for target in ("fetch-data:", "up:", "down:", "notebook:", "train:"):
         assert target in makefile_text
 
     assert compose["services"]["feature"]["environment"]["RAW_DATA_DIR"] == "/app/data/raw"

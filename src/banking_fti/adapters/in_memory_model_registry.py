@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 
 from banking_fti.ports.model_registry import RegisteredModel
 
@@ -13,6 +14,7 @@ class _RegistryEntry:
     challenger: RegisteredModel | None = None
     champion: RegisteredModel | None = None
     previous: RegisteredModel | None = None
+    next_version: int = 1
     history: list[RegisteredModel] = field(default_factory=list)
 
 
@@ -40,7 +42,18 @@ class InMemoryModelRegistry:
 
     def register_challenger(self, model: RegisteredModel) -> RegisteredModel:
         entry = self._entry(model.model_name)
-        challenger = self._with_status(model, "challenger")
+        if model.version <= 0:
+            assigned_version = entry.next_version
+            entry.next_version += 1
+        else:
+            assigned_version = model.version
+            entry.next_version = max(entry.next_version, model.version + 1)
+        challenger = replace(
+            model,
+            version=assigned_version,
+            status="challenger",
+            metrics=MappingProxyType(dict(model.metrics)),
+        )
         entry.challenger = challenger
         entry.history.append(challenger)
         return challenger

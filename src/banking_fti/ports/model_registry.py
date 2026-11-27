@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Protocol, runtime_checkable
 
 
@@ -25,11 +27,13 @@ class RegisteredModel:
     preprocessor_path: str
 
     git_sha: str | None = None
+    dvc_lock_hash: str | None = None
     pipeline_version: str | None = None
     compute_backend: str | None = None
     executor: str | None = None
     timestamp_start: str | None = None
     timestamp_end: str | None = None
+    metrics: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @runtime_checkable

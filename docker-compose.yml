@@ -24,6 +24,23 @@ services:
       - ./data/raw:/app/data/raw:ro
       - feast_data:/app/feature_repo/data
 
+  train:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.train
+    depends_on:
+      feature:
+        condition: service_completed_successfully
+    environment:
+      <<: *feast-env
+      MODEL_ARTIFACT_DIR: /app/artifacts/models
+      TRAINING_EXECUTOR: local_docker
+      GIT_SHA: ${GIT_SHA:-unknown}
+      DVC_LOCK_HASH: ${DVC_LOCK_HASH:-untracked}
+    volumes:
+      - feast_data:/app/feature_repo/data
+      - model_artifacts:/app/artifacts/models
+
   feast-ui:
     build:
       context: .
@@ -56,3 +73,4 @@ services:
 
 volumes:
   feast_data: {}
+  model_artifacts: {}
