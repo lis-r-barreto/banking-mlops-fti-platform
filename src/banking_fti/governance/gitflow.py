@@ -37,6 +37,12 @@ FOOTER_LINE_RE = re.compile(r"^(?P<token>BREAKING CHANGE|[A-Za-z0-9-]+)(?::\s|\s
 MERGE_HEADER_RE = re.compile(
     r"^Merge (?:pull request #|branch '|remote-tracking branch '|[0-9a-f]{7,} into [0-9a-f]{7,})"
 )
+_RELEASE_BRANCH_REF_RE = re.compile(
+    r"release/(v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))"
+)
+_RELEASE_TITLE_RE = re.compile(
+    r"^chore\(release\):\s+release\s+(v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))$"
+)
 
 
 BranchType = Literal["feature", "release", "protected", "invalid"]
@@ -407,6 +413,19 @@ def plan_feature_to_develop_pr(
     )
 
 
+def extract_release_version_from_commit(message: str) -> str | None:
+    """Extract a `vX.Y.Z` release tag from a release merge or squash commit message."""
+    for raw_line in message.splitlines():
+        line = raw_line.strip()
+        branch_match = _RELEASE_BRANCH_REF_RE.search(line)
+        if branch_match:
+            return SemVer.parse(branch_match.group(1)).format()
+        title_match = _RELEASE_TITLE_RE.fullmatch(line)
+        if title_match:
+            return SemVer.parse(title_match.group(1)).format()
+    return None
+
+
 def plan_develop_to_release_pr(
     latest_main_tag: str | None,
     commits_since_main: Sequence[str],
@@ -414,6 +433,7 @@ def plan_develop_to_release_pr(
     open_prs: Sequence[OpenPullRequest],
     *,
     commits_since_release: Sequence[str] | None = None,
+    merged_release_branches: Sequence[str] = (),
 ) -> PromotionAction:
     """Plan an idempotent `develop -> release/vX.Y.Z` PR requiring manual merge."""
     parsed_commits = validate_commit_messages(commits_since_main, ignore_merges=True)
@@ -427,15 +447,23 @@ def plan_develop_to_release_pr(
             auto_merge=False,
         )
 
-    current_released = SemVer.parse(latest_main_tag) if latest_main_tag else None
+    merged_set = {b for b in merged_release_branches if RELEASE_BRANCH_RE.fullmatch(b)}
+    released_versions: list[SemVer] = []
+    if latest_main_tag:
+        released_versions.append(SemVer.parse(latest_main_tag))
+    for merged_branch in merged_set:
+        released_versions.append(SemVer.parse(merged_branch.removeprefix("release/")))
+    effective_released = max(released_versions) if released_versions else None
+
     valid_releases = sorted(
         (
             b
             for b in existing_release_branches
             if RELEASE_BRANCH_RE.fullmatch(b)
+            and b not in merged_set
             and (
-                current_released is None
-                or SemVer.parse(b.removeprefix("release/")) > current_released
+                effective_released is None
+                or SemVer.parse(b.removeprefix("release/")) > effective_released
             )
         ),
         key=lambda b: SemVer.parse(b.removeprefix("release/")),
@@ -456,7 +484,8 @@ def plan_develop_to_release_pr(
         version_tag = release_branch.removeprefix("release/")
         create_from: str | None = None
     else:
-        next_version = derive_next_semver(latest_main_tag, commits_since_main)
+        baseline_tag = effective_released.format() if effective_released else None
+        next_version = derive_next_semver(baseline_tag, commits_since_main)
         version_tag = next_version.format()
         release_branch = f"release/{version_tag}"
         create_from = "main"

@@ -12,6 +12,7 @@ from dataclasses import asdict
 from banking_fti.governance.gitflow import (
     OpenPullRequest,
     PromotionAction,
+    extract_release_version_from_commit,
     parse_conventional_commit,
     plan_develop_to_release_pr,
     plan_feature_to_develop_pr,
@@ -110,6 +111,10 @@ def _run_plan_promotion(args: argparse.Namespace) -> int:
             if not isinstance(existing_releases_raw, list):
                 raise ValueError("--existing-release-branches-json must decode to a JSON array.")
             existing_releases = [str(item) for item in existing_releases_raw]
+            merged_releases_raw = json.loads(args.merged_release_branches_json)
+            if not isinstance(merged_releases_raw, list):
+                raise ValueError("--merged-release-branches-json must decode to a JSON array.")
+            merged_releases = [str(item) for item in merged_releases_raw]
             latest_tag = args.latest_tag or None
             commits_since_release = (
                 _read_git_commits(args.release_commit_range) if args.release_commit_range else None
@@ -120,6 +125,7 @@ def _run_plan_promotion(args: argparse.Namespace) -> int:
                 existing_release_branches=existing_releases,
                 open_prs=open_prs,
                 commits_since_release=commits_since_release,
+                merged_release_branches=merged_releases,
             )
         else:
             if not args.release_branch:
@@ -133,6 +139,27 @@ def _run_plan_promotion(args: argparse.Namespace) -> int:
         return 1
 
     print(json.dumps(asdict(action)))
+    return 0
+
+
+def _run_resolve_release_tag(args: argparse.Namespace) -> int:
+    try:
+        if args.message is not None:
+            raw_message = str(args.message)
+        else:
+            proc = subprocess.run(
+                ["git", "log", "-1", "--format=%B", str(args.commit_ref)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            raw_message = proc.stdout
+        tag = extract_release_version_from_commit(raw_message)
+    except (ValueError, subprocess.CalledProcessError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    print(tag or "")
     return 0
 
 
@@ -163,7 +190,12 @@ def _build_parser() -> argparse.ArgumentParser:
     promo_parser.add_argument("--release-commit-range", default=None)
     promo_parser.add_argument("--message", action="append", default=[])
     promo_parser.add_argument("--existing-release-branches-json", default="[]")
+    promo_parser.add_argument("--merged-release-branches-json", default="[]")
     promo_parser.add_argument("--open-prs-json", default="[]")
+
+    tag_parser = subparsers.add_parser("resolve-release-tag")
+    tag_parser.add_argument("--message", default=None)
+    tag_parser.add_argument("--commit-ref", default="HEAD")
 
     return parser
 
@@ -176,6 +208,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_validate_branch(args)
     if args.command == "validate-commits":
         return _run_validate_commits(args)
+    if args.command == "resolve-release-tag":
+        return _run_resolve_release_tag(args)
     return _run_plan_promotion(args)
 
 

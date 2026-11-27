@@ -1,13 +1,16 @@
 """Tests for Banking GitFlow governance, Conventional Branch/Commits, SemVer, and PR promotion."""
 
 import json
+from pathlib import Path
 
 import pytest
+import yaml
 
 from banking_fti.governance.gitflow import (
     OpenPullRequest,
     SemVer,
     derive_next_semver,
+    extract_release_version_from_commit,
     parse_conventional_commit,
     plan_develop_to_release_pr,
     plan_feature_to_develop_pr,
@@ -424,3 +427,109 @@ def test_plan_develop_to_release_pr_returns_noop_when_no_commits_ahead_of_open_r
 
     assert action.action == "noop"
     assert action.auto_merge is False
+
+
+def test_plan_develop_to_release_pr_bumps_past_merged_release_branches_even_without_tag() -> None:
+    feat_plan = plan_develop_to_release_pr(
+        latest_main_tag="v0.1.0",
+        commits_since_main=["feat(training): add validation notebook"],
+        existing_release_branches=["release/v0.1.0", "release/v0.2.0"],
+        merged_release_branches=["release/v0.1.0", "release/v0.2.0"],
+        open_prs=[],
+    )
+    assert feat_plan.action == "create"
+    assert feat_plan.base == "release/v0.3.0"
+    assert feat_plan.title == "chore(release): prepare release v0.3.0"
+    assert feat_plan.create_base_from_ref == "main"
+
+    fix_plan = plan_develop_to_release_pr(
+        latest_main_tag="v0.1.0",
+        commits_since_main=["fix(ci): handle missing tag"],
+        existing_release_branches=["release/v0.1.0", "release/v0.2.0"],
+        merged_release_branches=["release/v0.2.0"],
+        open_prs=[],
+    )
+    assert fix_plan.action == "create"
+    assert fix_plan.base == "release/v0.2.1"
+    assert fix_plan.title == "chore(release): prepare release v0.2.1"
+    assert fix_plan.create_base_from_ref == "main"
+
+
+def test_extract_release_version_from_commit() -> None:
+    github_merge = (
+        "Merge pull request #9 from lis-r-barreto/release/v0.2.0\n\nchore(release): release v0.2.0"
+    )
+    assert extract_release_version_from_commit(github_merge) == "v0.2.0"
+    assert extract_release_version_from_commit("chore(release): release v1.2.3") == "v1.2.3"
+    assert extract_release_version_from_commit("feat(mlflow): add adapter") is None
+
+
+def test_cli_plan_promotion_and_resolve_release_tag(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from banking_fti.governance.cli import main
+
+    exit_code = main(
+        [
+            "plan-promotion",
+            "--stage",
+            "develop-to-release",
+            "--latest-tag",
+            "v0.1.0",
+            "--message",
+            "feat(mlflow): add mlflow registry",
+            "--existing-release-branches-json",
+            '["release/v0.1.0", "release/v0.2.0"]',
+            "--merged-release-branches-json",
+            '["release/v0.1.0", "release/v0.2.0"]',
+            "--open-prs-json",
+            "[]",
+        ]
+    )
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["action"] == "create"
+    assert payload["base"] == "release/v0.3.0"
+    assert payload["title"] == "chore(release): prepare release v0.3.0"
+
+    assert (
+        main(
+            [
+                "resolve-release-tag",
+                "--message",
+                "Merge pull request #9 from org/release/v0.2.0",
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out.strip() == "v0.2.0"
+
+    assert main(["resolve-release-tag", "--message", "feat(mlflow): add adapter"]) == 0
+    assert capsys.readouterr().out.strip() == ""
+
+
+def test_cd_pipeline_workflow_tags_main_releases_and_excludes_merged_release_branches() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    workflow = yaml.safe_load(
+        (repo_root / ".github" / "workflows" / "cd-pipeline.yml").read_text(encoding="utf-8")
+    )
+    push_branches = workflow[True]["push"]["branches"]
+    assert "main" in push_branches
+
+    jobs = workflow["jobs"]
+    open_release_steps = "\n".join(
+        str(step.get("with", {}).get("script", "")) for step in jobs["open-release-pr"]["steps"]
+    )
+    assert "--merged-release-branches-json" in open_release_steps
+    assert '"branch", "-r", "--merged", "origin/main"' in open_release_steps
+
+    assert "tag-release" in jobs
+    tag_job = jobs["tag-release"]
+    assert tag_job["if"] == "github.ref == 'refs/heads/main'"
+    assert tag_job["permissions"]["contents"] == "write"
+    tag_steps_text = "\n".join(
+        str(step.get("run", "")) + "\n" + str(step.get("with", {}).get("script", ""))
+        for step in tag_job["steps"]
+    )
+    assert "resolve-release-tag" in tag_steps_text
+    assert "refs/tags/" in tag_steps_text
