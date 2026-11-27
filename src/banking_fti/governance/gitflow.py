@@ -34,7 +34,9 @@ COMMIT_HEADER_RE = re.compile(
     r"^(?P<type>[a-z]+)(?:\((?P<scope>[a-z0-9][a-z0-9._-]*)\))?(?P<bang>!)?:\s(?P<desc>\S.*)$"
 )
 FOOTER_LINE_RE = re.compile(r"^(?P<token>BREAKING CHANGE|[A-Za-z0-9-]+)(?::\s|\s#)(?P<val>.*)$")
-MERGE_HEADER_RE = re.compile(r"^Merge (?:pull request #|branch '|remote-tracking branch ')")
+MERGE_HEADER_RE = re.compile(
+    r"^Merge (?:pull request #|branch '|remote-tracking branch '|[0-9a-f]{7,} into [0-9a-f]{7,})"
+)
 
 
 BranchType = Literal["feature", "release", "protected", "invalid"]
