@@ -29,7 +29,7 @@ jobs:
           enable-cache: true
 
       - name: Sync dev dependencies
-        run: uv sync --extra dev
+        run: uv sync --extra feature --extra train --extra dev
 
       - name: Validate protected branch and run checks
         run: |
@@ -183,7 +183,7 @@ jobs:
           enable-cache: true
 
       - name: Sync dev dependencies
-        run: uv sync --extra dev
+        run: uv sync --extra feature --extra train --extra dev
 
       - name: Validate release branch and run checks
         run: |
