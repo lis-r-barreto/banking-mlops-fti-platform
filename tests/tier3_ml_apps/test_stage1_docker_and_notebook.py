@@ -70,6 +70,7 @@ def test_stage1_dockerfiles_and_compose_wire_feast_feature_and_notebook() -> Non
         _REPO_ROOT / "docker" / "Dockerfile.feast",
         _REPO_ROOT / "docker" / "Dockerfile.feature",
         _REPO_ROOT / "docker" / "Dockerfile.notebook",
+        _REPO_ROOT / "docker" / "Dockerfile.train",
         _REPO_ROOT / "docker-compose.yml",
     ]
     for path in required_files:
@@ -81,13 +82,25 @@ def test_stage1_dockerfiles_and_compose_wire_feast_feature_and_notebook() -> Non
         for forbidden in _FORBIDDEN_CONTAINER_TOKENS:
             assert forbidden not in content
 
+    train_dockerfile = (_REPO_ROOT / "docker" / "Dockerfile.train").read_text(encoding="utf-8")
+    assert "libgomp1" in train_dockerfile
+    assert "--extra feature --extra train" in train_dockerfile
+    assert "banking_fti.training.pipeline" in train_dockerfile
+
+    notebook_dockerfile = (_REPO_ROOT / "docker" / "Dockerfile.notebook").read_text(
+        encoding="utf-8"
+    )
+    assert "libgomp1" in notebook_dockerfile
+    assert "--extra feature --extra train" in notebook_dockerfile
+
     compose = yaml.safe_load((_REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
     assert "feast_data" in compose["volumes"]
+    assert "model_artifacts" in compose["volumes"]
 
     services = compose["services"]
-    assert set(services.keys()) == {"feast", "feature", "notebook", "feast-ui"}
+    assert set(services.keys()) == {"feast", "feature", "notebook", "feast-ui", "train"}
 
-    for svc_name in ("feast", "feature", "notebook"):
+    for svc_name in ("feast", "feature", "notebook", "train"):
         assert "feast_data:/app/feature_repo/data" in services[svc_name]["volumes"]
         env_entries = services[svc_name].get("environment", {})
         env_keys = list(env_entries.keys()) if isinstance(env_entries, dict) else list(env_entries)
@@ -98,20 +111,29 @@ def test_stage1_dockerfiles_and_compose_wire_feast_feature_and_notebook() -> Non
         services["feature"]["depends_on"]["feast"]["condition"] == "service_completed_successfully"
     )
     assert (
+        services["train"]["depends_on"]["feature"]["condition"] == "service_completed_successfully"
+    )
+    assert "model_artifacts:/app/artifacts/models" in services["train"]["volumes"]
+    assert services["train"]["environment"]["MODEL_ARTIFACT_DIR"] == "/app/artifacts/models"
+    assert (
         services["notebook"]["depends_on"]["feature"]["condition"]
         == "service_completed_successfully"
+    )
+    assert (
+        services["notebook"]["depends_on"]["train"]["condition"] == "service_completed_successfully"
     )
     assert "8888:8888" in services["notebook"]["ports"]
     notebook_volumes = services["notebook"]["volumes"]
     assert "./notebooks:/app/notebooks" in notebook_volumes
     assert "./feature_repo:/app/feature_repo" in notebook_volumes
     assert "./src:/app/src" in notebook_volumes
+    assert "model_artifacts:/app/artifacts/models" in notebook_volumes
     assert notebook_volumes.index("./feature_repo:/app/feature_repo") < notebook_volumes.index(
         "feast_data:/app/feature_repo/data"
     )
 
     makefile_text = (_REPO_ROOT / "Makefile").read_text(encoding="utf-8")
-    for target in ("fetch-data:", "up:", "down:", "notebook:"):
+    for target in ("fetch-data:", "up:", "down:", "notebook:", "train:"):
         assert target in makefile_text
 
     assert compose["services"]["feature"]["environment"]["RAW_DATA_DIR"] == "/app/data/raw"
@@ -253,4 +275,43 @@ def test_stage1_validation_notebook_executes_end_to_end_offline(
     assert namespace["train_has_label"] is True
     assert namespace["batch_omits_label"] is True
     assert not (shared_dir / "credit_applications.parquet").exists()
-    assert not (_REPO_ROOT / "feature_repo" / "data").exists()
+    repo_data_dir = _REPO_ROOT / "feature_repo" / "data"
+    assert not repo_data_dir.exists() or list(repo_data_dir.iterdir()) == []
+
+
+def test_stage1_training_notebook_executes_end_to_end_offline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("lightgbm")
+    notebook_path = _REPO_ROOT / "notebooks" / "02_stage1_credit_risk_training.ipynb"
+    assert notebook_path.exists()
+
+    nb = json.loads(notebook_path.read_text(encoding="utf-8"))
+    assert nb["nbformat"] == 4
+    code_cells = [cell for cell in nb["cells"] if cell["cell_type"] == "code"]
+    assert len(code_cells) >= 4
+
+    shared_dir = tmp_path / "shared_feast_data"
+    shared_art_dir = tmp_path / "shared_model_artifacts"
+    sandbox_feast_dir = tmp_path / "nb_sandbox_feast"
+    sandbox_art_dir = tmp_path / "nb_sandbox_artifacts"
+    monkeypatch.setenv("FEAST_REPO_PATH", str(_REPO_ROOT / "feature_repo"))
+    monkeypatch.setenv("FEAST_DATA_DIR", str(shared_dir))
+    monkeypatch.setenv("MODEL_ARTIFACT_DIR", str(shared_art_dir))
+    monkeypatch.setenv("TRAINING_NOTEBOOK_SANDBOX_FEAST_DIR", str(sandbox_feast_dir))
+    monkeypatch.setenv("TRAINING_NOTEBOOK_SANDBOX_ARTIFACT_DIR", str(sandbox_art_dir))
+
+    namespace: dict[str, object] = {}
+    for cell in code_cells:
+        source = "".join(cell["source"])
+        exec(compile(source, str(notebook_path), "exec"), namespace)
+
+    sandbox_result = namespace["sandbox_result"]
+    assert sandbox_result.gate_passed is True  # type: ignore[attr-defined]
+    assert sandbox_result.parity_pass is True  # type: ignore[attr-defined]
+    assert namespace["onnx_scores_valid"] is True
+    assert namespace["rotation_verified"] is True
+    assert not (shared_dir / "credit_applications.parquet").exists()
+    repo_data_dir = _REPO_ROOT / "feature_repo" / "data"
+    assert not repo_data_dir.exists() or list(repo_data_dir.iterdir()) == []
