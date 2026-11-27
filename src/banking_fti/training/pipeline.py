@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import lightgbm as lgb
 import numpy as np
@@ -329,7 +329,8 @@ class TrainingPipeline:
         self._native_model.fit(
             X_train,
             y_train,
-            eval_set=[(X_train, y_train), (X_holdout, y_holdout)],
+            eval_X=cast(Any, (X_train, X_holdout)),
+            eval_y=cast(Any, (y_train, y_holdout)),
             eval_names=["train", "holdout"],
             eval_metric="binary_logloss",
             callbacks=[
@@ -358,6 +359,12 @@ class TrainingPipeline:
                 initial_types=[("input", FloatTensorType([None, X_holdout.shape[1]]))],
                 zipmap=False,
             )
+            # Set dynamic batch dim on graph outputs to avoid VerifyOutputSizes warnings
+            for output in onnx_model.graph.output:
+                dims = output.type.tensor_type.shape.dim
+                if dims:
+                    dims[0].ClearField("dim_value")
+                    dims[0].dim_param = "N"
             onnx_bytes = bytes(onnx_model.SerializeToString())
             sess = ort.InferenceSession(onnx_bytes)
             self._onnx_session = sess

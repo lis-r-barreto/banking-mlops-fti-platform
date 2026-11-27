@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -179,7 +180,10 @@ def test_training_pipeline_passes_gate_persists_onnx_artifacts_and_lineage(tmp_p
         pipeline_version="v0.1.0",
         dvc_lock_path=dvc_lock,
     )
-    result = pipeline.train(num_boost_round=80, random_state=42)
+    with warnings.catch_warnings(record=True) as caught_warnings:
+        warnings.simplefilter("always")
+        result = pipeline.train(num_boost_round=80, random_state=42)
+    assert not any("eval_set" in str(w.message) for w in caught_warnings)
 
     assert result.convergence_passed is True
     assert result.nan_inf_passed is True
@@ -230,6 +234,7 @@ def test_training_pipeline_passes_gate_persists_onnx_artifacts_and_lineage(tmp_p
     )
     X_sample = reloaded_pp.transform_features(joined)
     sess = ort.InferenceSession(onnx_path.read_bytes())
+    assert sess.get_outputs()[0].shape[0] == "N"
     outputs = sess.run(None, {"input": X_sample})
     probs = np.asarray(outputs[1], dtype=np.float64)[:, 1]
     assert probs.shape == (5,)

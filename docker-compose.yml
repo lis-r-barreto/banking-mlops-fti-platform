@@ -61,7 +61,11 @@ services:
     depends_on:
       feature:
         condition: service_completed_successfully
-    environment: *feast-env
+      train:
+        condition: service_completed_successfully
+    environment:
+      <<: *feast-env
+      MODEL_ARTIFACT_DIR: /app/artifacts/models
     ports:
       - "8888:8888"
     volumes:
@@ -70,6 +74,7 @@ services:
       - ./src:/app/src
       - ./data/raw:/app/data/raw:ro
       - feast_data:/app/feature_repo/data
+      - model_artifacts:/app/artifacts/models
 
 volumes:
   feast_data: {}

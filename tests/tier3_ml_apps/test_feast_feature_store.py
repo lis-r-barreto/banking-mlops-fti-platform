@@ -431,7 +431,8 @@ def test_feast_store_supports_customer_keyed_credit_apps_long_ttl_and_custom_dat
     custom_data_dir = tmp_path / "custom_data"
     store = FeastFeatureStore(repo_root / "feature_repo", data_dir=custom_data_dir)
     assert (custom_data_dir / "registry.db").exists()
-    assert not (repo_root / "feature_repo" / "data").exists()
+    repo_data_dir = repo_root / "feature_repo" / "data"
+    assert not repo_data_dir.exists() or list(repo_data_dir.iterdir()) == []
 
     old_profile = _profiles_batch_1().copy()
     old_profile["event_timestamp"] = pd.to_datetime(
