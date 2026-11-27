@@ -119,6 +119,9 @@ def _run_plan_promotion(args: argparse.Namespace) -> int:
             commits_since_release = (
                 _read_git_commits(args.release_commit_range) if args.release_commit_range else None
             )
+            main_commits = (
+                _read_git_commits(args.main_commit_range) if args.main_commit_range else ()
+            )
             action = plan_develop_to_release_pr(
                 latest_main_tag=latest_tag,
                 commits_since_main=messages,
@@ -126,6 +129,7 @@ def _run_plan_promotion(args: argparse.Namespace) -> int:
                 open_prs=open_prs,
                 commits_since_release=commits_since_release,
                 merged_release_branches=merged_releases,
+                main_commit_messages=main_commits,
             )
         else:
             if not args.release_branch:
@@ -188,6 +192,7 @@ def _build_parser() -> argparse.ArgumentParser:
     promo_parser.add_argument("--latest-tag", default="")
     promo_parser.add_argument("--commit-range", default=None)
     promo_parser.add_argument("--release-commit-range", default=None)
+    promo_parser.add_argument("--main-commit-range", default=None)
     promo_parser.add_argument("--message", action="append", default=[])
     promo_parser.add_argument("--existing-release-branches-json", default="[]")
     promo_parser.add_argument("--merged-release-branches-json", default="[]")

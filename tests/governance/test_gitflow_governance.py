@@ -521,6 +521,7 @@ def test_cd_pipeline_workflow_tags_main_releases_and_excludes_merged_release_bra
         str(step.get("with", {}).get("script", "")) for step in jobs["open-release-pr"]["steps"]
     )
     assert "--merged-release-branches-json" in open_release_steps
+    assert "--main-commit-range" in open_release_steps
     assert '"branch", "-r", "--merged", "origin/main"' in open_release_steps
 
     assert "tag-release" in jobs
@@ -533,3 +534,24 @@ def test_cd_pipeline_workflow_tags_main_releases_and_excludes_merged_release_bra
     )
     assert "resolve-release-tag" in tag_steps_text
     assert "refs/tags/" in tag_steps_text
+    assert "deleteRef" in tag_steps_text
+    assert "heads/release/" in tag_steps_text
+
+
+def test_plan_develop_to_release_pr_bumps_past_released_main_commits_when_branch_deleted() -> None:
+    plan = plan_develop_to_release_pr(
+        latest_main_tag="v0.1.0",
+        commits_since_main=["feat(training): add validation notebook"],
+        existing_release_branches=[],
+        merged_release_branches=[],
+        main_commit_messages=[
+            "Merge pull request #9 from lis-r-barreto/release/v0.2.0\n\n"
+            "chore(release): release v0.2.0"
+        ],
+        open_prs=[],
+    )
+
+    assert plan.action == "create"
+    assert plan.base == "release/v0.3.0"
+    assert plan.title == "chore(release): prepare release v0.3.0"
+    assert plan.create_base_from_ref == "main"

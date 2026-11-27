@@ -434,6 +434,7 @@ def plan_develop_to_release_pr(
     *,
     commits_since_release: Sequence[str] | None = None,
     merged_release_branches: Sequence[str] = (),
+    main_commit_messages: Sequence[str] = (),
 ) -> PromotionAction:
     """Plan an idempotent `develop -> release/vX.Y.Z` PR requiring manual merge."""
     parsed_commits = validate_commit_messages(commits_since_main, ignore_merges=True)
@@ -453,6 +454,10 @@ def plan_develop_to_release_pr(
         released_versions.append(SemVer.parse(latest_main_tag))
     for merged_branch in merged_set:
         released_versions.append(SemVer.parse(merged_branch.removeprefix("release/")))
+    for main_msg in main_commit_messages:
+        extracted = extract_release_version_from_commit(main_msg)
+        if extracted is not None:
+            released_versions.append(SemVer.parse(extracted))
     effective_released = max(released_versions) if released_versions else None
 
     valid_releases = sorted(

@@ -141,6 +141,8 @@ jobs:
               latestTag,
               "--commit-range",
               "origin/main..HEAD",
+              "--main-commit-range",
+              "origin/main",
               "--existing-release-branches-json",
               JSON.stringify(existingReleases),
               "--merged-release-branches-json",
@@ -356,6 +358,20 @@ jobs:
             } catch (err) {
               if (err.status === 422) {
                 core.info(`Release tag ${releaseTag} already exists.`);
+              } else {
+                throw err;
+              }
+            }
+            try {
+              await github.rest.git.deleteRef({
+                owner,
+                repo,
+                ref: `heads/release/${releaseTag}`,
+              });
+              core.info(`Deleted merged release branch release/${releaseTag}.`);
+            } catch (err) {
+              if (err.status === 422 || err.status === 404) {
+                core.info(`Release branch release/${releaseTag} already absent.`);
                 return;
               }
               throw err;
