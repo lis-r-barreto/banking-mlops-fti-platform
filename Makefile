@@ -1,4 +1,4 @@
-.PHONY: install lint format-check typecheck test check fetch-data up down notebook feast-ui train
+.PHONY: install lint format-check typecheck test check fetch-data up down notebook feast-ui train mlflow
 
 install:
 	uv sync --extra feature --extra train --extra dev
@@ -34,3 +34,6 @@ feast-ui:
 
 train:
 	docker compose up --build train
+
+mlflow:
+	docker compose up --build mlflow

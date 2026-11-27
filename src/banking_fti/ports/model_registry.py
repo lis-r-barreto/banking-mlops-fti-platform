@@ -71,6 +71,48 @@ class ModelRegistry(Protocol):
         """
         ...
 
-    def rollback_to_previous(self, model_name: str) -> dict[str, object]:
+    def rollback_to_previous(
+        self,
+        model_name: str,
+        *,
+        expected_feature_view_version: str | None = None,
+    ) -> dict[str, object]:
         """Atomically demote the champion and promote the `@previous` alias."""
         ...
+
+
+def validate_rollback_compatibility(
+    *,
+    model_name: str,
+    current_champion: RegisteredModel | None,
+    previous: RegisteredModel | None,
+    expected_feature_view_version: str | None,
+) -> dict[str, object] | None:
+    """Return a structured failure payload if rollback is invalid, else ``None``."""
+    champion_version = current_champion.version if current_champion is not None else None
+    if previous is None:
+        return {
+            "ok": False,
+            "model_name": model_name,
+            "champion_version": champion_version,
+            "previous_version": None,
+            "error": "no @previous to roll back to",
+        }
+    target_fv = (
+        expected_feature_view_version
+        if expected_feature_view_version is not None
+        else (current_champion.feature_view_version if current_champion is not None else None)
+    )
+    if target_fv is not None and previous.feature_view_version != target_fv:
+        return {
+            "ok": False,
+            "model_name": model_name,
+            "champion_version": champion_version,
+            "previous_version": previous.version,
+            "feature_view_version": previous.feature_view_version,
+            "error": (
+                "incompatible feature_view_version: "
+                f"previous={previous.feature_view_version!r}, expected={target_fv!r}"
+            ),
+        }
+    return None

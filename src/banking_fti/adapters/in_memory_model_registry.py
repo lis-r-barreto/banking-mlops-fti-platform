@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 
-from banking_fti.ports.model_registry import RegisteredModel
+from banking_fti.ports.model_registry import RegisteredModel, validate_rollback_compatibility
 
 
 @dataclass
@@ -29,6 +29,8 @@ class InMemoryModelRegistry:
     Atomic promotion rotates ``champion -> previous`` and ``challenger -> champion``.
     Atomic rollback demotes ``champion -> previous`` and promotes ``previous -> champion``.
     """
+
+    backend_name: str = "in_memory"
 
     def __init__(self) -> None:
         self._entries: dict[str, _RegistryEntry] = {}
@@ -108,16 +110,22 @@ class InMemoryModelRegistry:
             "error": None,
         }
 
-    def rollback_to_previous(self, model_name: str) -> dict[str, object]:
+    def rollback_to_previous(
+        self,
+        model_name: str,
+        *,
+        expected_feature_view_version: str | None = None,
+    ) -> dict[str, object]:
         entry = self._entry(model_name)
-        if entry.previous is None:
-            return {
-                "ok": False,
-                "model_name": model_name,
-                "champion_version": self._version_of(entry.champion),
-                "previous_version": None,
-                "error": "no @previous to roll back to",
-            }
+        failure = validate_rollback_compatibility(
+            model_name=model_name,
+            current_champion=entry.champion,
+            previous=entry.previous,
+            expected_feature_view_version=expected_feature_view_version,
+        )
+        if failure is not None:
+            return failure
+        assert entry.previous is not None
         demoted_champion = entry.champion
         new_champion = self._with_status(entry.previous, "champion")
         entry.champion = new_champion
@@ -132,6 +140,7 @@ class InMemoryModelRegistry:
             "model_name": model_name,
             "champion_version": new_champion.version,
             "previous_version": self._version_of(entry.previous),
+            "feature_view_version": new_champion.feature_view_version,
             "error": None,
         }
 

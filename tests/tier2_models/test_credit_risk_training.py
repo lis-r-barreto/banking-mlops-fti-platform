@@ -414,3 +414,59 @@ def test_training_pipeline_cli_runs_against_feast_offline_store(
     assert payload["onnx_max_abs_diff"] < 1e-5
     assert payload["serving_smoke_passed"] is True
     assert (artifact_dir / "credit_risk_batch").exists()
+
+
+def test_training_pipeline_cli_logs_to_mlflow_registry_when_tracking_uri_given(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from banking_fti.adapters import MlflowModelRegistry
+
+    repo_dir = tmp_path / "feast_repo"
+    data_dir = tmp_path / "feast_data"
+    artifact_dir = tmp_path / "model_artifacts"
+    tracking_uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
+
+    feast_store = FeastFeatureStore(repo_path=repo_dir, data_dir=data_dir)
+    sim = BankingEventSimulator(SimulatorConfig(num_customers=80, backfill_days=60, seed=42))
+    batch = sim.generate_backfill(end_time=datetime(2026, 2, 1, tzinfo=UTC))
+    FeaturePipeline(feast_store).run_batch(batch)
+
+    exit_code = training_pipeline_mod.main(
+        [
+            "--repo-path",
+            str(repo_dir),
+            "--data-dir",
+            str(data_dir),
+            "--artifact-dir",
+            str(artifact_dir),
+            "--num-boost-round",
+            "50",
+            "--seed",
+            "42",
+            "--mlflow-tracking-uri",
+            tracking_uri,
+            "--mlflow-experiment",
+            "banking_fti_cli",
+            "--mlflow-environment",
+            "hom",
+        ]
+    )
+    assert exit_code == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["registry_backend"] == "mlflow"
+    assert payload["challenger_registered"] is True
+
+    mlflow_reg = MlflowModelRegistry(
+        tracking_uri=tracking_uri,
+        experiment_name="banking_fti_cli",
+        environment="hom",
+        artifact_cache_dir=tmp_path / "verify_cache",
+    )
+    registered = mlflow_reg.get_champion("credit_risk_batch") or mlflow_reg.get_challenger(
+        "credit_risk_batch"
+    )
+    assert registered is not None
+    assert registered.version == 1
+    assert Path(registered.onnx_model_path).exists()

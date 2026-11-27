@@ -69,6 +69,7 @@ def test_stage1_dockerfiles_and_compose_wire_feast_feature_and_notebook() -> Non
         _REPO_ROOT / ".dockerignore",
         _REPO_ROOT / "docker" / "Dockerfile.feast",
         _REPO_ROOT / "docker" / "Dockerfile.feature",
+        _REPO_ROOT / "docker" / "Dockerfile.mlflow",
         _REPO_ROOT / "docker" / "Dockerfile.notebook",
         _REPO_ROOT / "docker" / "Dockerfile.train",
         _REPO_ROOT / "docker-compose.yml",
@@ -81,6 +82,16 @@ def test_stage1_dockerfiles_and_compose_wire_feast_feature_and_notebook() -> Non
         assert "--extra feature" in content
         for forbidden in _FORBIDDEN_CONTAINER_TOKENS:
             assert forbidden not in content
+
+    mlflow_dockerfile = (_REPO_ROOT / "docker" / "Dockerfile.mlflow").read_text(encoding="utf-8")
+    assert "mlflow" in mlflow_dockerfile
+    assert "--backend-store-uri" in mlflow_dockerfile
+    assert "--serve-artifacts" in mlflow_dockerfile
+    assert "--allowed-hosts" in mlflow_dockerfile
+    assert "EXPOSE 5000" in mlflow_dockerfile
+    assert "HEALTHCHECK" in mlflow_dockerfile
+    for forbidden in _FORBIDDEN_CONTAINER_TOKENS:
+        assert forbidden not in mlflow_dockerfile
 
     train_dockerfile = (_REPO_ROOT / "docker" / "Dockerfile.train").read_text(encoding="utf-8")
     assert "libgomp1" in train_dockerfile
@@ -96,9 +107,10 @@ def test_stage1_dockerfiles_and_compose_wire_feast_feature_and_notebook() -> Non
     compose = yaml.safe_load((_REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
     assert "feast_data" in compose["volumes"]
     assert "model_artifacts" in compose["volumes"]
+    assert "mlflow_data" in compose["volumes"]
 
     services = compose["services"]
-    assert set(services.keys()) == {"feast", "feature", "notebook", "feast-ui", "train"}
+    assert set(services.keys()) == {"feast", "feature", "mlflow", "notebook", "feast-ui", "train"}
 
     for svc_name in ("feast", "feature", "notebook", "train"):
         assert "feast_data:/app/feature_repo/data" in services[svc_name]["volumes"]
@@ -107,14 +119,25 @@ def test_stage1_dockerfiles_and_compose_wire_feast_feature_and_notebook() -> Non
         for key in env_keys:
             assert not any(str(key).startswith(prefix) for prefix in _CLOUD_SECRET_PREFIXES)
 
+    mlflow_svc = services["mlflow"]
+    assert "5000:5000" in mlflow_svc["ports"]
+    assert "mlflow_data:/mlflow" in mlflow_svc["volumes"]
+    assert "healthcheck" in mlflow_svc
+    mlflow_env = mlflow_svc.get("environment", {})
+    mlflow_env_keys = list(mlflow_env.keys()) if isinstance(mlflow_env, dict) else list(mlflow_env)
+    for key in mlflow_env_keys:
+        assert not any(str(key).startswith(prefix) for prefix in _CLOUD_SECRET_PREFIXES)
+
     assert (
         services["feature"]["depends_on"]["feast"]["condition"] == "service_completed_successfully"
     )
     assert (
         services["train"]["depends_on"]["feature"]["condition"] == "service_completed_successfully"
     )
+    assert services["train"]["depends_on"]["mlflow"]["condition"] == "service_healthy"
     assert "model_artifacts:/app/artifacts/models" in services["train"]["volumes"]
     assert services["train"]["environment"]["MODEL_ARTIFACT_DIR"] == "/app/artifacts/models"
+    assert services["train"]["environment"]["MLFLOW_TRACKING_URI"] == "http://mlflow:5000"
     assert (
         services["notebook"]["depends_on"]["feature"]["condition"]
         == "service_completed_successfully"
@@ -122,6 +145,8 @@ def test_stage1_dockerfiles_and_compose_wire_feast_feature_and_notebook() -> Non
     assert (
         services["notebook"]["depends_on"]["train"]["condition"] == "service_completed_successfully"
     )
+    assert services["notebook"]["depends_on"]["mlflow"]["condition"] == "service_healthy"
+    assert services["notebook"]["environment"]["MLFLOW_TRACKING_URI"] == "http://mlflow:5000"
     assert "8888:8888" in services["notebook"]["ports"]
     notebook_volumes = services["notebook"]["volumes"]
     assert "./notebooks:/app/notebooks" in notebook_volumes
@@ -133,7 +158,7 @@ def test_stage1_dockerfiles_and_compose_wire_feast_feature_and_notebook() -> Non
     )
 
     makefile_text = (_REPO_ROOT / "Makefile").read_text(encoding="utf-8")
-    for target in ("fetch-data:", "up:", "down:", "notebook:", "train:"):
+    for target in ("fetch-data:", "up:", "down:", "notebook:", "train:", "mlflow:"):
         assert target in makefile_text
 
     assert compose["services"]["feature"]["environment"]["RAW_DATA_DIR"] == "/app/data/raw"
@@ -284,7 +309,10 @@ def test_stage1_training_notebook_executes_end_to_end_offline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pytest.importorskip("lightgbm")
-    notebook_path = _REPO_ROOT / "notebooks" / "02_stage1_credit_risk_training.ipynb"
+    old_notebook_path = _REPO_ROOT / "notebooks" / "02_stage1_credit_risk_training.ipynb"
+    assert not old_notebook_path.exists(), "Replaced training notebook must not remain as an orphan"
+
+    notebook_path = _REPO_ROOT / "notebooks" / "02_stage1_credit_risk_training_and_mlflow.ipynb"
     assert notebook_path.exists()
 
     nb = json.loads(notebook_path.read_text(encoding="utf-8"))
@@ -296,11 +324,13 @@ def test_stage1_training_notebook_executes_end_to_end_offline(
     shared_art_dir = tmp_path / "shared_model_artifacts"
     sandbox_feast_dir = tmp_path / "nb_sandbox_feast"
     sandbox_art_dir = tmp_path / "nb_sandbox_artifacts"
+    sandbox_mlflow_dir = tmp_path / "nb_sandbox_mlflow"
     monkeypatch.setenv("FEAST_REPO_PATH", str(_REPO_ROOT / "feature_repo"))
     monkeypatch.setenv("FEAST_DATA_DIR", str(shared_dir))
     monkeypatch.setenv("MODEL_ARTIFACT_DIR", str(shared_art_dir))
     monkeypatch.setenv("TRAINING_NOTEBOOK_SANDBOX_FEAST_DIR", str(sandbox_feast_dir))
     monkeypatch.setenv("TRAINING_NOTEBOOK_SANDBOX_ARTIFACT_DIR", str(sandbox_art_dir))
+    monkeypatch.setenv("TRAINING_NOTEBOOK_SANDBOX_MLFLOW_DIR", str(sandbox_mlflow_dir))
 
     namespace: dict[str, object] = {}
     for cell in code_cells:
@@ -312,6 +342,9 @@ def test_stage1_training_notebook_executes_end_to_end_offline(
     assert sandbox_result.parity_pass is True  # type: ignore[attr-defined]
     assert namespace["onnx_scores_valid"] is True
     assert namespace["rotation_verified"] is True
+    assert namespace["incompatible_rollback_blocked"] is True
+    assert namespace["rollback_verified"] is True
     assert not (shared_dir / "credit_applications.parquet").exists()
+    assert not (_REPO_ROOT / "mlruns").exists()
     repo_data_dir = _REPO_ROOT / "feature_repo" / "data"
     assert not repo_data_dir.exists() or list(repo_data_dir.iterdir()) == []

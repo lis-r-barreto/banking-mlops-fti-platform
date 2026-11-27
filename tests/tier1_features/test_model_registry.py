@@ -194,3 +194,60 @@ def test_register_challenger_assigns_monotonic_versions_and_preserves_lineage() 
     assert second.version == 2
     assert second.dvc_lock_hash == "dvc-456"
     assert registry.get_challenger("credit_risk_batch") == second
+
+
+def test_rollback_blocks_incompatible_expected_feature_view_version() -> None:
+    registry = InMemoryModelRegistry()
+    v1 = registry.register_challenger(_challenge("credit_risk_batch", 1))
+    registry.promote_to_champion(
+        "credit_risk_batch", challenger_version=v1.version, validation_passed=True
+    )
+    v2 = registry.register_challenger(_challenge("credit_risk_batch", 2))
+    registry.promote_to_champion(
+        "credit_risk_batch", challenger_version=v2.version, validation_passed=True
+    )
+
+    result = registry.rollback_to_previous("credit_risk_batch", expected_feature_view_version="v2")
+
+    assert result["ok"] is False
+    assert "feature_view_version" in str(result["error"])
+    champion = registry.get_champion("credit_risk_batch")
+    previous = registry.get_previous("credit_risk_batch")
+    assert champion is not None and champion.version == 2
+    assert previous is not None and previous.version == 1
+
+
+def test_rollback_blocks_when_champion_and_previous_feature_view_versions_differ() -> None:
+    registry = InMemoryModelRegistry()
+    v1 = registry.register_challenger(_challenge("credit_risk_batch", 1))
+    registry.promote_to_champion(
+        "credit_risk_batch", challenger_version=v1.version, validation_passed=True
+    )
+    v2_champ = RegisteredModel(
+        model_name="credit_risk_batch",
+        version=2,
+        status="challenger",
+        run_id="run-2",
+        created_at="2026-01-02T00:00:00+00:00",
+        feature_view_name="credit_applications",
+        feature_view_version="v2",
+        feature_schema_hash="hash-2",
+        dataset_sha256="sha-2",
+        native_model_path="native.txt",
+        onnx_model_path="onnx.onnx",
+        preprocessor_path="preprocessor.joblib",
+    )
+    registry.register_challenger(v2_champ)
+    registry.promote_to_champion("credit_risk_batch", challenger_version=2, validation_passed=True)
+
+    blocked = registry.rollback_to_previous("credit_risk_batch")
+    assert blocked["ok"] is False
+    assert "feature_view_version" in str(blocked["error"])
+    champion = registry.get_champion("credit_risk_batch")
+    assert champion is not None and champion.version == 2 and champion.feature_view_version == "v2"
+
+    allowed = registry.rollback_to_previous("credit_risk_batch", expected_feature_view_version="v1")
+    assert allowed["ok"] is True
+    assert allowed["champion_version"] == 1
+    assert allowed["previous_version"] == 2
+    assert allowed["feature_view_version"] == "v1"

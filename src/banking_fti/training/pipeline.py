@@ -69,6 +69,7 @@ class TrainingResult:
     champion_comparison_passed: bool = False
     gate_reasons: tuple[str, ...] = ()
     artifact_dir: str | None = None
+    registry_backend: str = "in_memory"
 
     def to_dict(self) -> dict[str, object]:
         """Serialize training result into a JSON-compatible dictionary."""
@@ -95,6 +96,7 @@ class TrainingResult:
             "champion_comparison_passed": self.champion_comparison_passed,
             "gate_reasons": list(self.gate_reasons),
             "artifact_dir": self.artifact_dir,
+            "registry_backend": self.registry_backend,
         }
 
 
@@ -544,6 +546,7 @@ class TrainingPipeline:
             champion_comparison_passed=gate_result.champion_comparison_passed,
             gate_reasons=gate_result.reasons,
             artifact_dir=artifact_dir,
+            registry_backend=self._registry_backend_name(),
         )
 
     @staticmethod
@@ -588,7 +591,11 @@ class TrainingPipeline:
             challenger_registered=False,
             dataset_sha256="",
             promoted=False,
+            registry_backend=self._registry_backend_name(),
         )
+
+    def _registry_backend_name(self) -> str:
+        return str(getattr(self.model_registry, "backend_name", "in_memory"))
 
     @staticmethod
     def _as_int(value: Any) -> int | None:
@@ -610,13 +617,27 @@ def run_stage1_training(
     seed: int = 42,
     compute_backend: str = "cpu",
     executor: str = "local_python",
+    mlflow_tracking_uri: str | None = None,
+    mlflow_experiment: str = "banking_fti",
+    mlflow_environment: str = "local",
 ) -> TrainingResult:
-    """Run Stage 1 Training Pipeline against FeastFeatureStore and InMemoryModelRegistry."""
+    """Run Stage 1 Training Pipeline against FeastFeatureStore and configured ModelRegistry."""
     from banking_fti.adapters.feast_store import FeastFeatureStore
     from banking_fti.adapters.in_memory_model_registry import InMemoryModelRegistry
 
     store = FeastFeatureStore(repo_path=repo_path, data_dir=data_dir)
-    registry = InMemoryModelRegistry()
+    resolved_uri = (mlflow_tracking_uri or "").strip()
+    registry: ModelRegistry
+    if resolved_uri:
+        from banking_fti.adapters.mlflow_registry import MlflowModelRegistry
+
+        registry = MlflowModelRegistry(
+            tracking_uri=resolved_uri,
+            experiment_name=mlflow_experiment,
+            environment=mlflow_environment,
+        )
+    else:
+        registry = InMemoryModelRegistry()
     pipeline = TrainingPipeline(
         feature_store=store,
         model_registry=registry,
@@ -661,6 +682,19 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=os.environ.get("TRAINING_EXECUTOR", "local_python"),
     )
     parser.add_argument(
+        "--mlflow-tracking-uri",
+        default=os.environ.get("MLFLOW_TRACKING_URI"),
+        help="Optional MLflow tracking URI; falls back to InMemoryModelRegistry when unset.",
+    )
+    parser.add_argument(
+        "--mlflow-experiment",
+        default=os.environ.get("MLFLOW_EXPERIMENT_NAME", "banking_fti"),
+    )
+    parser.add_argument(
+        "--mlflow-environment",
+        default=os.environ.get("MLFLOW_ENVIRONMENT", "local"),
+    )
+    parser.add_argument(
         "--require-promotion",
         action="store_true",
         help="Exit with code 1 if the model validation gate blocks promotion.",
@@ -681,6 +715,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         seed=args.seed,
         compute_backend=args.compute_backend,
         executor=args.executor,
+        mlflow_tracking_uri=args.mlflow_tracking_uri,
+        mlflow_experiment=args.mlflow_experiment,
+        mlflow_environment=args.mlflow_environment,
     )
     print(json.dumps(result.to_dict(), sort_keys=True))
     if args.require_promotion and not result.promoted:

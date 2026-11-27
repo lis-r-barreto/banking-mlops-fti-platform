@@ -24,6 +24,23 @@ services:
       - ./data/raw:/app/data/raw:ro
       - feast_data:/app/feature_repo/data
 
+  mlflow:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mlflow
+    environment:
+      MLFLOW_DISABLE_AGENT_HINT: "1"
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_data:/mlflow
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
   train:
     build:
       context: .
@@ -31,10 +48,16 @@ services:
     depends_on:
       feature:
         condition: service_completed_successfully
+      mlflow:
+        condition: service_healthy
     environment:
       <<: *feast-env
       MODEL_ARTIFACT_DIR: /app/artifacts/models
       TRAINING_EXECUTOR: local_docker
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_EXPERIMENT_NAME: banking_fti
+      MLFLOW_ENVIRONMENT: local
+      MLFLOW_DISABLE_AGENT_HINT: "1"
       GIT_SHA: ${GIT_SHA:-unknown}
       DVC_LOCK_HASH: ${DVC_LOCK_HASH:-untracked}
     volumes:
@@ -61,11 +84,17 @@ services:
     depends_on:
       feature:
         condition: service_completed_successfully
+      mlflow:
+        condition: service_healthy
       train:
         condition: service_completed_successfully
     environment:
       <<: *feast-env
       MODEL_ARTIFACT_DIR: /app/artifacts/models
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_EXPERIMENT_NAME: banking_fti
+      MLFLOW_ENVIRONMENT: local
+      MLFLOW_DISABLE_AGENT_HINT: "1"
     ports:
       - "8888:8888"
     volumes:
@@ -79,3 +108,4 @@ services:
 volumes:
   feast_data: {}
   model_artifacts: {}
+  mlflow_data: {}
