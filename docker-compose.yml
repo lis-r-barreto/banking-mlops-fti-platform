@@ -24,6 +24,19 @@ services:
       - ./data/raw:/app/data/raw:ro
       - feast_data:/app/feature_repo/data
 
+  feast-ui:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.feast-ui
+    depends_on:
+      feast:
+        condition: service_completed_successfully
+    environment: *feast-env
+    ports:
+      - "8889:8888"
+    volumes:
+      - feast_data:/app/feature_repo/data
+
   notebook:
     build:
       context: .
