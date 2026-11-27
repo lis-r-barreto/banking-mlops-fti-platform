@@ -42,18 +42,25 @@ jobs:
           PR_TITLE: ${{ github.event_name == 'pull_request' && github.event.pull_request.title || '' }}
         run: |
           git fetch origin develop:refs/remotes/origin/develop || true
+          git fetch origin main:refs/remotes/origin/main || true
           if git rev-parse --verify origin/develop >/dev/null 2>&1; then
             COMMIT_RANGE="origin/develop..HEAD"
+          elif git rev-parse --verify origin/main >/dev/null 2>&1; then
+            COMMIT_RANGE="origin/main..HEAD"
           else
-            COMMIT_RANGE="HEAD"
+            COMMIT_RANGE=""
           fi
-          if [ -n "$PR_TITLE" ]; then
-            uv run python -m banking_fti.governance.cli validate-commits \
-              --pr-title "$PR_TITLE" \
-              --commit-range "$COMMIT_RANGE"
+          if [ -n "$COMMIT_RANGE" ]; then
+            if [ -n "$PR_TITLE" ]; then
+              uv run python -m banking_fti.governance.cli validate-commits \
+                --pr-title "$PR_TITLE" \
+                --commit-range "$COMMIT_RANGE"
+            else
+              uv run python -m banking_fti.governance.cli validate-commits \
+                --commit-range "$COMMIT_RANGE"
+            fi
           else
-            uv run python -m banking_fti.governance.cli validate-commits \
-              --commit-range "$COMMIT_RANGE"
+            echo "Skip commit validation: no base branch (develop/main) available"
           fi
 
       - name: Run quality checks and offline pytest
