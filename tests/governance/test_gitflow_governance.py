@@ -134,6 +134,8 @@ def test_validate_commit_messages_skips_git_merge_commits_when_enabled() -> None
         [
             "Merge pull request #7 from org/feature/01-init",
             "Merge branch 'develop' into release/v0.1.0",
+            "Merge c9920ee78b49bd69ae175edbb98cb3ba9e756461 "
+            "into bf3af2c0ad1183842597310f67936f4c94420ed5",
             "fix(ci): handle empty commit diff",
         ],
         ignore_merges=True,

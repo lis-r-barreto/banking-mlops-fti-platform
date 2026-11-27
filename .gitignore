@@ -100,3 +100,4 @@ SPEC.md
 .dvc/tmp/
 data/raw/
 feature_repo/data/
+.coverage
