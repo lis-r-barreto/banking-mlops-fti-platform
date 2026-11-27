@@ -41,7 +41,7 @@ from banking_fti.core.contracts import (
 )
 from banking_fti.ports.feature_store import SchemaMismatchError, WriteReceipt
 
-DEFAULT_FEAST_PROJECT = "banking_fti_platform"
+DEFAULT_FEAST_PROJECT = "banking_feature_store"
 _SCHEMA_HASHES_FILENAME = "_schema_hashes.json"
 
 _FEAST_DTYPES: Mapping[ColumnDType, Any] = {

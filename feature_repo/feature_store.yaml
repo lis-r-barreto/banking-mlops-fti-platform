@@ -1,4 +1,4 @@
-project: banking_fti_platform
+project: banking_feature_store
 registry: data/registry.db
 provider: local
 online_store: null
